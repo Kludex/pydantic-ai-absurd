@@ -44,10 +44,10 @@ class PlanResult(BaseModel):
 workflow = Workflow(absurd=absurd, pool=pool)
 
 planner = AbsurdAgent(
-    Agent('anthropic:claude-sonnet-4-6', name='planner', output_type=PlanResult),
+    Agent('openai:gpt-5.2', name='planner', output_type=PlanResult),
     absurd,
 )
-analyst = AbsurdAgent(Agent('anthropic:claude-sonnet-4-6', name='analyst'), absurd)
+analyst = AbsurdAgent(Agent('openai:gpt-5.2', name='analyst'), absurd)
 
 @workflow.brain('planner')
 async def planner_brain(ctx):
