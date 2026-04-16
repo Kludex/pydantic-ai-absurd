@@ -61,7 +61,6 @@ async def test_brain_runs_and_emits_lifecycle(workflow: Workflow) -> None:
     async def greeter_brain(ctx: BrainContext[None]) -> None:
         await ctx.post('hello from greeter')
 
-    workflow.register()
     session = await Session.create(workflow.pool)
     handle = await workflow.wake(session, 'greeter')
     assert not handle.deduplicated
@@ -81,7 +80,6 @@ async def test_brain_failure_emits_brain_failed(workflow: Workflow) -> None:
     async def bad_brain(ctx: BrainContext[None]) -> None:
         raise RuntimeError('boom')
 
-    workflow.register()
     session = await Session.create(workflow.pool)
     await workflow.wake(session, 'bad', max_attempts=1)
 
@@ -106,7 +104,6 @@ async def test_on_poison_handler_is_called(absurd: AsyncAbsurd, pool: AsyncPool)
     async def bad_brain(ctx: BrainContext[None]) -> None:
         raise RuntimeError('kaboom')
 
-    workflow.register()
     session = await Session.create(pool)
     await workflow.wake(session, 'bad', max_attempts=1)
     await absurd.work_batch(batch_size=1)
@@ -119,7 +116,6 @@ async def test_post_status_emits_status_update(workflow: Workflow) -> None:
     async def status_brain(ctx: BrainContext[None]) -> None:
         await ctx.post_status('starting')
 
-    workflow.register()
     session = await Session.create(workflow.pool)
     await workflow.wake(session, 'status')
     await workflow.absurd.work_batch(batch_size=1)
@@ -138,7 +134,6 @@ async def test_brain_chain_via_ctx_wake(workflow: Workflow) -> None:
     async def analyst(ctx: BrainContext[None]) -> None:
         await ctx.post('analyzed')
 
-    workflow.register()
     session = await Session.create(workflow.pool)
     await workflow.wake(session, 'router')
 
@@ -161,7 +156,6 @@ async def test_brain_input_is_accessible(workflow: Workflow) -> None:
         observed['session_id'] = ctx.session.id
         observed['absurd_ctx'] = ctx.absurd_ctx
 
-    workflow.register()
     session = await Session.create(workflow.pool)
     await workflow.wake(session, 'echo', input={'msg': 'hi'})
     await workflow.absurd.work_batch(batch_size=1)
@@ -187,7 +181,6 @@ async def test_agent_run_threads_history(workflow: Workflow) -> None:
         await ctx.agent_run(absurd_agent, 'continue')
         await ctx.agent_run(absurd_agent, 'again')
 
-    workflow.register()
     session = await Session.create(workflow.pool)
     await workflow.wake(session, 'driver')
     await workflow.absurd.work_batch(batch_size=1)
@@ -202,7 +195,6 @@ async def test_brain_sleep_checkpoints_via_absurd(workflow: Workflow) -> None:
         await ctx.sleep(0.1)
         await ctx.post('awake')
 
-    workflow.register()
     session = await Session.create(workflow.pool)
     await workflow.wake(session, 'sleeper')
     await workflow.absurd.work_batch(batch_size=1)  # suspends on sleep_for
@@ -213,22 +205,11 @@ async def test_brain_sleep_checkpoints_via_absurd(workflow: Workflow) -> None:
     assert 'awake' in contents
 
 
-async def test_register_is_idempotent(workflow: Workflow) -> None:
-    @workflow.brain('once')
-    async def once_brain(ctx: BrainContext[None]) -> None:  # pragma: no cover
-        pass
-
-    workflow.register()
-    workflow.register()
-    workflow.register()
-
-
 async def test_rejects_non_object_input(workflow: Workflow) -> None:
     @workflow.brain('needs_object')
     async def _br(ctx: BrainContext[None]) -> None:  # pragma: no cover - never reached
         pass
 
-    workflow.register()
     session = await Session.create(workflow.pool)
     params: JsonValue = {'session_id': str(session.id), 'input': 'not-a-dict'}
     await workflow.absurd.spawn('brain.needs_object', params, max_attempts=1)
@@ -240,7 +221,6 @@ async def test_parallel_concurrency_skips_lock(workflow: Workflow) -> None:
     async def par_brain(ctx: BrainContext[None]) -> None:
         await ctx.post('parallel')
 
-    workflow.register()
     session = await Session.create(workflow.pool)
     await workflow.wake(session, 'par', concurrency='parallel')
     await workflow.absurd.work_batch(batch_size=1)
@@ -253,7 +233,6 @@ async def test_missing_session_id_fails_task(workflow: Workflow) -> None:
     async def _br(ctx: BrainContext[None]) -> None:  # pragma: no cover
         pass
 
-    workflow.register()
     await workflow.absurd.spawn('brain.needs_id', {'input': {}}, max_attempts=1)
     await workflow.absurd.work_batch(batch_size=1)
 
@@ -263,7 +242,6 @@ async def test_deterministic_dedup_collapses_duplicate_wakes(workflow: Workflow)
     async def _br(ctx: BrainContext[None]) -> None:
         await ctx.post('once')  # pragma: no cover - not drained
 
-    workflow.register()
     session = await Session.create(workflow.pool)
     first = await workflow.wake(session, 'dedup_x', input={'k': 'v'})
     second = await workflow.wake(session, 'dedup_x', input={'k': 'v'})
@@ -277,7 +255,6 @@ async def test_explicit_dedup_key_collapses(workflow: Workflow) -> None:
     async def _br(ctx: BrainContext[None]) -> None:
         await ctx.post('p')  # pragma: no cover - not drained
 
-    workflow.register()
     session = await Session.create(workflow.pool)
     first = await workflow.wake(session, 'dedup_y', dedup_key='custom', input={'k': 1})
     second = await workflow.wake(session, 'dedup_y', dedup_key='custom', input={'k': 2})
@@ -289,7 +266,6 @@ async def test_supersede_cancels_existing_tasks(workflow: Workflow) -> None:
     async def _br(ctx: BrainContext[None]) -> None:
         pass  # pragma: no cover
 
-    workflow.register()
     session = await Session.create(workflow.pool)
     first = await workflow.wake(session, 'dedup_s', input={'v': 1})
     second = await workflow.wake(session, 'dedup_s', input={'v': 2}, concurrency='supersede')
@@ -301,7 +277,6 @@ async def test_wake_by_session_id_only(workflow: Workflow) -> None:
     async def _br(ctx: BrainContext[None]) -> None:
         pass  # pragma: no cover
 
-    workflow.register()
     session = await Session.create(workflow.pool)
     handle = await workflow.wake(session.id, 'dedup_w')
     assert handle.task_id

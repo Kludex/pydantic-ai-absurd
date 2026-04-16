@@ -46,7 +46,8 @@ session = await Session.create(pool)
 await session.append(kind='user_message', actor='user', payload={'content': 'hi'})
 await workflow.wake(session, 'planner')
 
-# Worker (separate process)
+# Worker (separate process - brains are registered with Absurd the moment
+# they're decorated, so just start the loop)
 await workflow.run()
 ```
 

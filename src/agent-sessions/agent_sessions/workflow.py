@@ -85,13 +85,13 @@ class BrainContext(Generic[AgentDepsT]):
     def __init__(
         self,
         *,
-        app: Workflow,
+        workflow: Workflow,
         name: str,
         absurd_ctx: AsyncTaskContext,
         session: Session,
         invocation: BrainInvocation,
     ) -> None:
-        self._app = app
+        self._workflow = workflow
         self._name = name
         self._absurd_ctx = absurd_ctx
         self._session = session
@@ -162,8 +162,8 @@ class BrainContext(Generic[AgentDepsT]):
         input: dict[str, JsonValue] | None = None,
         dedup_key: str | None = None,
     ) -> WakeHandle:
-        """Chain to another brain on the same app. Carries our event as the causation id."""
-        return await self._app.wake(
+        """Chain to another brain on the same workflow. Carries our event as the causation id."""
+        return await self._workflow.wake(
             self._session,
             brain_name,
             input=input,
@@ -203,7 +203,6 @@ class Workflow:
         self._max_wake_depth = max_wake_depth
         self._on_poison = on_poison
         self._brains: dict[str, BrainDefinition] = {}
-        self._registered = False
 
     @property
     def absurd(self) -> AsyncAbsurd:
@@ -218,13 +217,14 @@ class Workflow:
         return list(self._brains.values())
 
     def brain(self, name: str) -> Callable[[BrainFn], BrainDefinition]:
-        """Decorator: register a brain on this app under `name`."""
+        """Decorator: register a brain under `name` on this workflow and with Absurd."""
 
         def decorator(fn: BrainFn) -> BrainDefinition:
             if name in self._brains:
-                raise ValueError(f'brain {name!r} is already registered on this app')
+                raise ValueError(f'brain {name!r} is already registered on this workflow')
             definition = BrainDefinition(name=name, fn=fn)
             self._brains[name] = definition
+            self._register_with_absurd(definition)
             return definition
 
         return decorator
@@ -232,17 +232,8 @@ class Workflow:
     def task_name(self, brain_name: str) -> str:
         return f'brain.{brain_name}'
 
-    def register(self) -> None:
-        """Register every brain as an Absurd task. Idempotent."""
-        if self._registered:
-            return
-        self._registered = True
-        for definition in self._brains.values():
-            self._register_one(definition)
-
     async def run(self) -> None:  # pragma: no cover - exercised in examples
         """Start the Absurd polling loop until `stop()` is called."""
-        self.register()
         await self._absurd.start_worker()
 
     def stop(self) -> None:  # pragma: no cover - counterpart to `run()`
@@ -259,7 +250,7 @@ class Workflow:
         causation_id: int | None = None,
         max_attempts: int | None = None,
     ) -> WakeHandle:
-        """Idempotent brain trigger bound to this app's absurd client and pool.
+        """Idempotent brain trigger bound to this workflow's absurd client and pool.
 
         See module docstring for concurrency semantics.
         """
@@ -292,11 +283,11 @@ class Workflow:
         await _record_dedup(self._pool, key, session_id, brain_name, task_uuid)
         return WakeHandle(task_id=str(task_uuid), dedup_key=key, deduplicated=False)
 
-    def _register_one(self, definition: BrainDefinition) -> None:
-        app = self
+    def _register_with_absurd(self, definition: BrainDefinition) -> None:
+        workflow = self
 
         async def handler(params: Mapping[str, JsonValue] | None, ctx: AsyncTaskContext) -> JsonValue:
-            return await _run_brain(app=app, definition=definition, params=params or {}, ctx=ctx)
+            return await _run_brain(workflow=workflow, definition=definition, params=params or {}, ctx=ctx)
 
         # Absurd's register_task decorator is typed for sync handlers; the
         # runtime dispatches to async handlers via `_execute_task`.
@@ -305,7 +296,7 @@ class Workflow:
 
 async def _run_brain(
     *,
-    app: Workflow,
+    workflow: Workflow,
     definition: BrainDefinition,
     params: Mapping[str, JsonValue],
     ctx: AsyncTaskContext,
@@ -319,17 +310,17 @@ async def _run_brain(
     concurrency_raw = params.get('concurrency')
     concurrency = concurrency_raw if isinstance(concurrency_raw, str) else 'queue'
 
-    session = await Session.load(app.pool, session_id)
-    await _check_wake_depth(app.pool, session_id, causation_id, app._max_wake_depth)
+    session = await Session.load(workflow.pool, session_id)
+    await _check_wake_depth(workflow.pool, session_id, causation_id, workflow._max_wake_depth)
 
     # Single-active-brain enforcement when concurrency == 'queue': take a
     # session-level advisory lock for the duration of the brain body.
     if concurrency == 'queue':
-        async with app.pool.connection() as conn:
+        async with workflow.pool.connection() as conn:
             await conn.execute('SELECT pg_advisory_lock(hashtextextended(%s, 1))', (str(session_id),))
             try:
                 await _execute_brain_body(
-                    app=app,
+                    workflow=workflow,
                     definition=definition,
                     ctx=ctx,
                     session=session,
@@ -340,7 +331,7 @@ async def _run_brain(
                 await conn.execute('SELECT pg_advisory_unlock(hashtextextended(%s, 1))', (str(session_id),))
     else:
         await _execute_brain_body(
-            app=app,
+            workflow=workflow,
             definition=definition,
             ctx=ctx,
             session=session,
@@ -352,7 +343,7 @@ async def _run_brain(
 
 async def _execute_brain_body(
     *,
-    app: Workflow,
+    workflow: Workflow,
     definition: BrainDefinition,
     ctx: AsyncTaskContext,
     session: Session,
@@ -367,7 +358,7 @@ async def _execute_brain_body(
         causation_id=causation_id,
     )
     brain_context: BrainContext[Any] = BrainContext(
-        app=app,
+        workflow=workflow,
         name=definition.name,
         absurd_ctx=ctx,
         session=session,
@@ -388,8 +379,8 @@ async def _execute_brain_body(
             visibility=Visibility.internal,
             causation_id=started.sequence,
         )
-        if app._on_poison is not None:
-            await app._on_poison(
+        if workflow._on_poison is not None:
+            await workflow._on_poison(
                 PoisonEvent(
                     session_id=session.id,
                     brain_name=definition.name,
