@@ -20,19 +20,21 @@ flowchart LR
 Two packages, built together:
 
 - **`pydantic-ai-absurd`** wraps a Pydantic AI `Agent` so every model call and MCP tool call is checkpointed into [Absurd](https://github.com/earendil-works/absurd). A crashed worker replays from the checkpoint - no tokens re-spent.
-- **`agent-sessions`** adds the session event log, `@brain` handlers, and an idempotent `wake()` that schedules brains as Absurd tasks. Default policy is one active brain per session; chains propagate `causation_id` for tracing.
+- **`agent-sessions`** adds the session event log, a `Workflow` orchestrator whose `@workflow.brain(...)` decorator registers brain handlers, and an idempotent `workflow.wake(...)` that schedules brains as Absurd tasks. Default policy is one active brain per session; chains propagate `causation_id` for tracing.
 
 ## Use a brain
 
 ```python
 from absurd_sdk import AsyncAbsurd
-from agent_sessions import Session, brain, create_worker, wake
+from agent_sessions import Session, Workflow
 from pydantic_ai import Agent
 from pydantic_ai_absurd import AbsurdAgent
 
+workflow = Workflow(absurd=absurd, pool=pool)
+
 planner = AbsurdAgent(Agent('anthropic:claude-sonnet-4-6', name='planner'), absurd, name='planner')
 
-@brain('planner')
+@workflow.brain('planner')
 async def planner_brain(ctx):
     result = await ctx.agent_run(planner, 'what should we do next?')
     await ctx.post(result.output)
@@ -42,11 +44,10 @@ async def planner_brain(ctx):
 # HTTP handler
 session = await Session.create(pool)
 await session.append(kind='user_message', actor='user', payload={'content': 'hi'})
-await wake(absurd, session, 'planner')
+await workflow.wake(session, 'planner')
 
 # Worker (separate process)
-worker = await create_worker(absurd=absurd, pool=pool)
-await worker.run()
+await workflow.run()
 ```
 
 The worker survives restarts mid-run: when it comes back, Absurd replays from the last checkpoint and the brain continues where it left off.

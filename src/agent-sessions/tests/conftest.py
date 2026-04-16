@@ -13,7 +13,7 @@ from psycopg.rows import TupleRow
 from psycopg_pool import AsyncConnectionPool
 from testcontainers.postgres import PostgresContainer
 
-from agent_sessions import apply_migrations, clear_registry
+from agent_sessions import Workflow, apply_migrations
 
 FIXTURES = Path(__file__).resolve().parent.parent.parent / 'pydantic-ai-absurd' / 'tests' / 'fixtures'
 ABSURD_SQL = (FIXTURES / 'absurd.sql').read_text()
@@ -67,14 +67,6 @@ async def pool(db_dsn: str) -> AsyncIterator[AsyncPool]:
         yield pool
 
 
-@pytest.fixture(autouse=True)
-def reset_registry() -> Iterator[None]:
-    """Clear the module-level brain registry between tests."""
-    clear_registry()
-    yield
-    clear_registry()
-
-
 @pytest.fixture
 async def absurd(db_dsn: str) -> AsyncIterator[AsyncAbsurd]:
     queue = f'test_{uuid4().hex[:8]}'
@@ -85,3 +77,8 @@ async def absurd(db_dsn: str) -> AsyncIterator[AsyncAbsurd]:
             yield client
         finally:
             await client.drop_queue()
+
+
+@pytest.fixture
+def workflow(pool: AsyncPool, absurd: AsyncAbsurd) -> Workflow:
+    return Workflow(absurd=absurd, pool=pool)
