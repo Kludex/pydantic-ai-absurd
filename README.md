@@ -25,10 +25,16 @@ Two packages, built together:
 ## Use a brain
 
 ```python
+from uuid import UUID
+
 from absurd_sdk import AsyncAbsurd
 from agent_sessions import Session, Workflow
 from pydantic_ai import Agent
 from pydantic_ai_absurd import AbsurdAgent
+from starlette.applications import Starlette
+from starlette.requests import Request
+from starlette.responses import JSONResponse
+from starlette.routing import Route
 
 workflow = Workflow(absurd=absurd, pool=pool)
 
@@ -41,17 +47,30 @@ async def planner_brain(ctx):
     if result.output.needs_analyst:
         await ctx.wake('analyst')
 
-# HTTP handler
-session = await Session.create(pool)
-await session.append(kind='user_message', actor='user', payload={'content': 'hi'})
-await workflow.wake(session, 'planner')
+# HTTP side (Starlette)
+async def post_message(request: Request) -> JSONResponse:
+    body = await request.json()
+    session = await Session.load(pool, UUID(request.path_params['session_id']))
+    await session.append(kind='user_message', actor='user', payload={'content': body['content']})
+    await workflow.wake(session, 'planner')
+    return JSONResponse({'ok': True})
 
-# Worker (separate process - brains are registered with Absurd the moment
+async def get_events(request: Request) -> JSONResponse:
+    session = await Session.load(pool, UUID(request.path_params['session_id']))
+    events = await session.events(after=int(request.query_params.get('after', 0)))
+    return JSONResponse([e.model_dump(mode='json') for e in events])
+
+app = Starlette(routes=[
+    Route('/sessions/{session_id}/messages', post_message, methods=['POST']),
+    Route('/sessions/{session_id}/events', get_events, methods=['GET']),
+])
+
+# Worker side (separate process - brains are registered with Absurd the moment
 # they're decorated, so just start the loop)
 await workflow.run()
 ```
 
-The worker survives restarts mid-run: when it comes back, Absurd replays from the last checkpoint and the brain continues where it left off.
+The worker survives restarts mid-run: when it comes back, Absurd replays from the last checkpoint and the brain continues where it left off. The Starlette process stays stateless - it only appends to the session and fires `wake()`.
 
 ## Develop
 
