@@ -87,6 +87,36 @@ await workflow.run()
 
 The worker survives restarts mid-run: when it comes back, Absurd replays from the last checkpoint and the brain continues where it left off. The Starlette process stays stateless - it only appends to the session and fires `wake()`.
 
+## Stream an agent to a Vercel AI SDK client
+
+For the user's HTTP turn - where the browser expects streaming SSE compatible with [`useChat`](https://ai-sdk.dev/docs/ai-sdk-ui/chatbot) - use Pydantic AI's built-in `VercelAIAdapter` on top of a Starlette route. Message history comes from the session; on completion we persist the new messages via the agent-sessions adapter so a follow-up brain can operate durably.
+
+```python
+from agent_sessions import Session
+from agent_sessions._pydantic_ai import messages_to_events
+from pydantic_ai import Agent
+from pydantic_ai.ui.vercel_ai import VercelAIAdapter
+from starlette.routing import Route
+
+chat = Agent('openai:gpt-5.2', name='chat')
+
+async def chat_endpoint(request):
+    session = await Session.load(pool, UUID(request.path_params['session_id']))
+    history = await session.messages()
+
+    async def persist(result):
+        for kwargs in messages_to_events(list(result.new_messages()), actor='chat'):
+            await session.append(**kwargs)
+
+    return await VercelAIAdapter.dispatch_request(
+        request, agent=chat, message_history=history, on_complete=persist,
+    )
+
+app = Starlette(routes=[Route('/sessions/{session_id}/chat', chat_endpoint, methods=['POST'])])
+```
+
+A runnable version is in `examples/vercel_starlette.py` - it spins up Postgres, streams real GPT-5.2 deltas, and verifies the session picks up the resulting messages.
+
 ## Develop
 
 ```bash
