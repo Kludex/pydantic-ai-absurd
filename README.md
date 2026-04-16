@@ -47,6 +47,7 @@ planner = AbsurdAgent(
     Agent('anthropic:claude-sonnet-4-6', name='planner', output_type=PlanResult),
     absurd,
 )
+analyst = AbsurdAgent(Agent('anthropic:claude-sonnet-4-6', name='analyst'), absurd)
 
 @workflow.brain('planner')
 async def planner_brain(ctx):
@@ -54,6 +55,12 @@ async def planner_brain(ctx):
     await ctx.post(result.output.reply)
     if result.output.needs_analyst:
         await ctx.wake('analyst')
+
+@workflow.brain('analyst')
+async def analyst_brain(ctx):
+    await ctx.post_status('analyzing...')
+    result = await ctx.agent_run(analyst, 'run a deep analysis')
+    await ctx.post(result.output)
 
 # HTTP side (Starlette)
 async def post_message(request: Request) -> JSONResponse:
