@@ -1,0 +1,14 @@
+#!/bin/sh
+
+set -ex
+
+if [ -z "$GITHUB_ACTIONS" ]; then
+    scripts/check
+fi
+
+cd src/pydantic-ai-absurd
+uv run coverage run -m pytest "$@"
+
+if [ -z "$GITHUB_ACTIONS" ]; then
+    uv run coverage report --show-missing --skip-covered --fail-under=100
+fi

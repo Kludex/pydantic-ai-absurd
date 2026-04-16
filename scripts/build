@@ -1,0 +1,6 @@
+#!/bin/sh -e
+
+set -x
+
+cd src/pydantic-ai-absurd
+uv build

@@ -1,0 +1,226 @@
+from __future__ import annotations
+
+from collections.abc import AsyncIterable, AsyncIterator
+
+import pytest
+from absurd_sdk import AsyncAbsurd, AsyncTaskContext, JsonValue
+from fastmcp import FastMCP
+from pydantic_ai import Agent, ModelMessage, ModelResponse
+from pydantic_ai.exceptions import UserError
+from pydantic_ai.mcp import MCPServerStdio
+from pydantic_ai.messages import AgentStreamEvent, TextPart
+from pydantic_ai.models.function import AgentInfo, FunctionModel
+from pydantic_ai.tools import RunContext
+from pydantic_ai.toolsets import FunctionToolset
+from pydantic_ai.toolsets.fastmcp import FastMCPToolset
+
+from pydantic_ai_absurd import AbsurdAgent, AbsurdFastMCPToolset, AbsurdMCPServer, AbsurdModel
+
+from .conftest import running_task_context
+
+pytestmark = pytest.mark.anyio
+
+
+def _make_model() -> FunctionModel:
+    def fn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        return ModelResponse(parts=[TextPart(content='ok')])
+
+    async def stream_fn(messages: list[ModelMessage], info: AgentInfo) -> AsyncIterator[str]:
+        yield 'ok'
+
+    return FunctionModel(fn, stream_function=stream_fn, model_name='fn')
+
+
+async def test_requires_name(absurd: AsyncAbsurd) -> None:
+    inner = Agent(_make_model())
+    with pytest.raises(UserError, match='unique `name`'):
+        AbsurdAgent(inner, absurd)
+
+
+async def test_model_swapped_with_absurd_model(absurd: AsyncAbsurd) -> None:
+    inner = Agent(_make_model(), name='a')
+    agent = AbsurdAgent(inner, absurd, name='a')
+    assert isinstance(agent.model, AbsurdModel)
+    assert agent.task_name == 'a.run'
+
+
+async def test_function_toolsets_are_not_wrapped(absurd: AsyncAbsurd) -> None:
+    toolset = FunctionToolset[None]()
+
+    @toolset.tool_plain
+    def echo(value: str) -> str:  # pragma: no cover - never invoked, only wrap check
+        return value
+
+    inner = Agent(_make_model(), toolsets=[toolset], name='a')
+    agent = AbsurdAgent(inner, absurd, name='a')
+    # Plain function toolsets pass through unchanged.
+    assert list(agent.toolsets)[0].__class__.__name__ != 'AbsurdMCPServer'
+
+
+async def test_fastmcp_toolsets_are_wrapped(absurd: AsyncAbsurd) -> None:
+    server: FastMCP[None] = FastMCP(name='calc')
+
+    @server.tool
+    def add(a: int, b: int) -> int:  # pragma: no cover - never invoked, only wrap check
+        return a + b
+
+    toolset = FastMCPToolset[None](server)
+    inner = Agent(_make_model(), toolsets=[toolset], name='a')
+    agent = AbsurdAgent(inner, absurd, name='a')
+    assert any(isinstance(t, AbsurdFastMCPToolset) for t in agent.toolsets)
+
+
+async def test_mcp_stdio_toolsets_are_wrapped(absurd: AsyncAbsurd) -> None:
+    # Construct a stdio MCP server (no subprocess spawned until used) to cover the
+    # MCPServer isinstance branch in _absurdify_toolset.
+    mcp_server = MCPServerStdio(command='true', args=[])
+    inner = Agent(_make_model(), toolsets=[mcp_server], name='a')
+    agent = AbsurdAgent(inner, absurd, name='a')
+    assert any(isinstance(t, AbsurdMCPServer) for t in agent.toolsets)
+
+
+async def test_iter_rejects_non_absurd_model(absurd: AsyncAbsurd) -> None:
+    inner = Agent(_make_model(), name='a')
+    agent = AbsurdAgent(inner, absurd, name='a')
+    with pytest.raises(UserError, match='Non-Absurd model cannot be overridden'):
+        async with agent.iter('hi', model=_make_model()):
+            pass  # pragma: no cover
+
+
+async def test_run_outside_task_context_raises(absurd: AsyncAbsurd) -> None:
+    inner = Agent(_make_model(), name='a')
+    agent = AbsurdAgent(inner, absurd, name='a')
+    with pytest.raises(UserError, match='must be called from inside an Absurd task handler'):
+        await agent.run('hi')
+
+
+async def test_run_inside_task_context_completes(absurd: AsyncAbsurd) -> None:
+    inner = Agent(_make_model(), name='a')
+    agent = AbsurdAgent(inner, absurd, name='a')
+
+    async def noop(params: JsonValue, ctx: AsyncTaskContext) -> JsonValue:  # pragma: no cover
+        return None
+
+    absurd.register_task(name='noop')(noop)  # type: ignore[arg-type]
+
+    async with running_task_context(absurd, 'noop'):
+        result = await agent.run('hi')
+    assert result.output == 'ok'
+
+
+async def test_run_sync_is_not_supported(absurd: AsyncAbsurd) -> None:
+    inner = Agent(_make_model(), name='a')
+    agent = AbsurdAgent(inner, absurd, name='a')
+    with pytest.raises(UserError, match='run_sync\\(\\) is not supported'):
+        agent.run_sync('hi')
+
+
+async def test_run_stream_events_is_not_supported(absurd: AsyncAbsurd) -> None:
+    inner = Agent(_make_model(), name='a')
+    agent = AbsurdAgent(inner, absurd, name='a')
+    with pytest.raises(UserError, match='run_stream_events'):
+        agent.run_stream_events('hi')
+
+
+async def test_run_stream_inside_task_raises(absurd: AsyncAbsurd) -> None:
+    inner = Agent(_make_model(), name='a')
+    agent = AbsurdAgent(inner, absurd, name='a')
+
+    async def noop(params: JsonValue, ctx: AsyncTaskContext) -> JsonValue:  # pragma: no cover
+        return None
+
+    absurd.register_task(name='noop')(noop)  # type: ignore[arg-type]
+
+    async with running_task_context(absurd, 'noop'):
+        with pytest.raises(UserError, match='run_stream'):
+            async with agent.run_stream('hi'):
+                pass  # pragma: no cover
+
+
+async def test_run_stream_outside_task_works(absurd: AsyncAbsurd) -> None:
+    inner = Agent(_make_model(), name='a')
+    agent = AbsurdAgent(inner, absurd, name='a')
+    async with agent.run_stream('hi') as result:
+        assert await result.get_output() == 'ok'
+
+
+async def test_iter_inside_task_works(absurd: AsyncAbsurd) -> None:
+    inner = Agent(_make_model(), name='a')
+    agent = AbsurdAgent(inner, absurd, name='a')
+
+    async def noop(params: JsonValue, ctx: AsyncTaskContext) -> JsonValue:  # pragma: no cover
+        return None
+
+    absurd.register_task(name='noop')(noop)  # type: ignore[arg-type]
+
+    async with running_task_context(absurd, 'noop'):
+        async with agent.iter('hi') as run:
+            async for _ in run:
+                pass
+        assert run.result is not None
+        assert run.result.output == 'ok'
+
+
+async def test_override_rejects_non_absurd_model(absurd: AsyncAbsurd) -> None:
+    inner = Agent(_make_model(), name='a')
+    agent = AbsurdAgent(inner, absurd, name='a')
+    with pytest.raises(UserError, match='Non-Absurd model cannot be overridden'):
+        with agent.override(model=_make_model()):
+            pass  # pragma: no cover
+
+
+async def test_override_accepts_absurd_model(absurd: AsyncAbsurd) -> None:
+    inner = Agent(_make_model(), name='a')
+    agent = AbsurdAgent(inner, absurd, name='a')
+    replacement = AbsurdModel(_make_model(), step_name_prefix='a')
+    with agent.override(model=replacement):
+        assert agent.model is not replacement  # _absurd_overrides still active in run path
+
+
+async def test_run_rejects_non_absurd_model(absurd: AsyncAbsurd) -> None:
+    inner = Agent(_make_model(), name='a')
+    agent = AbsurdAgent(inner, absurd, name='a')
+    with pytest.raises(UserError, match='Non-Absurd model cannot be overridden'):
+        await agent.run('hi', model=_make_model())
+
+
+async def test_register_task_exposes_run_handler(absurd: AsyncAbsurd) -> None:
+    inner = Agent(_make_model(), name='driver')
+    AbsurdAgent(inner, absurd, name='driver', register_task=True)
+
+    spawned = await absurd.spawn('driver.run', {'prompt': 'hello'})
+    await absurd.work_batch(batch_size=1)
+    result = await absurd.fetch_task_result(spawned['task_id'])
+    assert result is not None
+    assert result.state == 'completed'
+    assert isinstance(result.result, dict)
+    assert result.result['output'] == 'ok'
+
+
+async def test_register_task_is_idempotent(absurd: AsyncAbsurd) -> None:
+    inner = Agent(_make_model(), name='x')
+    agent = AbsurdAgent(inner, absurd, name='x', register_task=True)
+    # Second call should be a no-op, not error.
+    agent._register_task()
+
+
+async def test_run_without_model_on_wrapped_agent_raises(absurd: AsyncAbsurd) -> None:
+    inner = Agent(name='needs-model')  # no model
+    with pytest.raises(UserError, match='`model` set at construction'):
+        AbsurdAgent(inner, absurd, name='needs-model')
+
+
+async def test_event_stream_handler_override(absurd: AsyncAbsurd) -> None:
+    inner = Agent(_make_model(), name='a')
+
+    async def handler(run_ctx: RunContext[None], stream: AsyncIterable[AgentStreamEvent]) -> None:  # pragma: no cover
+        return None
+
+    agent = AbsurdAgent(inner, absurd, name='a', event_stream_handler=handler)
+    assert agent.event_stream_handler is handler
+
+
+async def test_event_stream_handler_falls_through_to_wrapped(absurd: AsyncAbsurd) -> None:
+    inner = Agent(_make_model(), name='a')
+    agent = AbsurdAgent(inner, absurd, name='a')
+    assert agent.event_stream_handler is None

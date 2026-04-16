@@ -1,0 +1,11 @@
+[project]
+name = "agent-workflow-workspace"
+version = "0.0.0"
+description = "Workspace root for pydantic-ai-absurd and agent-sessions."
+requires-python = ">=3.10"
+
+[tool.uv.workspace]
+members = ["src/*"]
+
+[tool.uv]
+required-version = ">=0.8.6"
