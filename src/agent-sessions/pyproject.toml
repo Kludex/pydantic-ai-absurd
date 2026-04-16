@@ -1,0 +1,97 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "agent-sessions"
+version = "0.0.1"
+description = "Durable session event log, brains, and wake() for Pydantic AI on Postgres."
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.10"
+authors = [
+    { name = "Marcelo Trylesinski", email = "marcelotryle@gmail.com" },
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+]
+dependencies = [
+    "pydantic-ai-absurd",
+    "psycopg[binary,pool]>=3.2",
+    "pydantic>=2.11",
+    "typing-extensions>=4.10.0",
+]
+
+[dependency-groups]
+dev = [
+    "coverage>=7.8.2",
+    "mypy==1.16.1",
+    "ruff==0.15.4",
+    "pytest==9.0.3",
+    "anyio>=4.8.0",
+    "testcontainers[postgres]>=4.14",
+]
+
+[tool.uv]
+default-groups = ["dev"]
+
+[tool.uv.sources]
+pydantic-ai-absurd = { workspace = true }
+
+[tool.hatch.build.targets.wheel]
+packages = ["agent_sessions"]
+artifacts = ["agent_sessions/schema/migrations.sql"]
+
+[tool.hatch.build.targets.sdist]
+include = ["agent_sessions", "README.md", "pyproject.toml"]
+artifacts = ["agent_sessions/schema/migrations.sql"]
+
+[tool.ruff]
+line-length = 120
+extend-exclude = [".venv"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "FA", "UP", "RUF100"]
+
+[tool.ruff.lint.isort]
+combine-as-imports = true
+
+[tool.ruff.format]
+quote-style = "single"
+
+[tool.mypy]
+strict = true
+files = ["agent_sessions", "tests"]
+
+[[tool.mypy.overrides]]
+module = "testcontainers.*"
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+addopts = "--strict-config --strict-markers"
+xfail_strict = true
+filterwarnings = ["error"]
+testpaths = ["tests"]
+
+[tool.coverage.run]
+source_pkgs = ["agent_sessions", "tests"]
+branch = true
+
+[tool.coverage.report]
+fail_under = 100
+show_missing = true
+skip_covered = true
+exclude_also = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+    "@overload",
+    "\\.\\.\\.",
+]
