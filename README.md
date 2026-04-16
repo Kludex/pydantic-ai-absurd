@@ -126,3 +126,11 @@ scripts/test      # pytest + 100% coverage gate (both packages)
 ```
 
 Tests run against a real Postgres via `testcontainers`. Docker must be up.
+
+The example scripts under `examples/` can be smoke-tested end-to-end against real OpenAI (kept out of CI - local use only):
+
+```bash
+OPENAI_API_KEY=... uv run pytest examples/tests/
+```
+
+The tests auto-skip when `OPENAI_API_KEY` isn't set.
