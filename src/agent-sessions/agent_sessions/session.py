@@ -234,7 +234,7 @@ class Session:
         timeout: float = 30.0,
         stop_after: int | None = None,
         ready: anyio.Event | None = None,
-    ) -> AsyncIterator[SessionEvent]:  # pragma: no cover - experimental, covered by an integration example
+    ) -> AsyncIterator[SessionEvent]:
         """Async iterator over new events via `LISTEN/NOTIFY`.
 
         Takes a `conninfo` (DSN) rather than the pool because LISTEN requires a
@@ -250,39 +250,48 @@ class Session:
         test-only knob to bound the iterator at N events; in production, callers
         should manage lifetime via `anyio.CancelScope` or similar.
         """
-        return _listen_iterator(conninfo, self._id, timeout, stop_after, ready)
+        return _listen_iterator(self._pool, conninfo, self._id, timeout, stop_after, ready)
 
 
-async def _listen_iterator(  # pragma: no cover - experimental; covered by an integration example
+async def _listen_iterator(
+    pool: AsyncPool,
     conninfo: str,
     session_id: UUID,
     timeout: float,
     stop_after: int | None,
     ready: anyio.Event | None,
 ) -> AsyncIterator[SessionEvent]:
-    """LISTEN on a session channel and yield SessionEvent rows looked up by notified sequence."""
+    """LISTEN on a session channel and yield SessionEvent rows looked up by notified sequence.
+
+    Uses two separate connections: a dedicated autocommit connection for `LISTEN`
+    (held for the iterator's lifetime) and the supplied pool for the row lookups.
+    Psycopg's `notifies()` generator is stateful on the connection it was
+    started from, so we must not issue unrelated queries on that same connection
+    between yields.
+    """
     channel = f'session_{session_id.hex}'
-    async with await AsyncConnection.connect(conninfo, autocommit=True) as conn:
-        await conn.execute(f'LISTEN {channel}')
+    async with await AsyncConnection.connect(conninfo, autocommit=True) as listen_conn:
+        await listen_conn.execute(f'LISTEN {channel}')
         if ready is not None:
             ready.set()
         yielded = 0
-        gen = conn.notifies(timeout=timeout, stop_after=stop_after)
-        async for notify in gen:
+        async for notify in listen_conn.notifies(timeout=timeout, stop_after=stop_after):
             seq = int(notify.payload)
-            cur = conn.cursor(row_factory=dict_row)
-            await cur.execute(
-                """
-                SELECT session_id, sequence, kind, actor, visibility, payload_version,
-                       payload, causation_id, supersedes, created_at
-                FROM session_events
-                WHERE session_id = %s AND sequence = %s
-                """,
-                (session_id, seq),
-            )
-            row = await cur.fetchone()
-            if row is not None:
-                yield SessionEvent.model_validate(row)
-                yielded += 1
-                if stop_after is not None and yielded >= stop_after:
-                    return
+            async with pool.connection() as lookup_conn:
+                cur = lookup_conn.cursor(row_factory=dict_row)
+                await cur.execute(
+                    """
+                    SELECT session_id, sequence, kind, actor, visibility, payload_version,
+                           payload, causation_id, supersedes, created_at
+                    FROM session_events
+                    WHERE session_id = %s AND sequence = %s
+                    """,
+                    (session_id, seq),
+                )
+                row = await cur.fetchone()
+            if row is None:  # pragma: no cover - we only notify after inserting the row in the same tx
+                continue
+            yield SessionEvent.model_validate(row)
+            yielded += 1
+            if stop_after is not None and yielded >= stop_after:
+                return
