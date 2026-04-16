@@ -46,7 +46,6 @@ workflow = Workflow(absurd=absurd, pool=pool)
 planner = AbsurdAgent(
     Agent('anthropic:claude-sonnet-4-6', name='planner', output_type=PlanResult),
     absurd,
-    name='planner',
 )
 
 @workflow.brain('planner')
