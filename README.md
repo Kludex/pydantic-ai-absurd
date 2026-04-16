@@ -29,6 +29,7 @@ from uuid import UUID
 
 from absurd_sdk import AsyncAbsurd
 from agent_sessions import Session, Workflow
+from pydantic import BaseModel
 from pydantic_ai import Agent
 from pydantic_ai_absurd import AbsurdAgent
 from starlette.applications import Starlette
@@ -36,14 +37,22 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 
+class PlanResult(BaseModel):
+    reply: str
+    needs_analyst: bool = False
+
 workflow = Workflow(absurd=absurd, pool=pool)
 
-planner = AbsurdAgent(Agent('anthropic:claude-sonnet-4-6', name='planner'), absurd, name='planner')
+planner = AbsurdAgent(
+    Agent('anthropic:claude-sonnet-4-6', name='planner', output_type=PlanResult),
+    absurd,
+    name='planner',
+)
 
 @workflow.brain('planner')
 async def planner_brain(ctx):
     result = await ctx.agent_run(planner, 'what should we do next?')
-    await ctx.post(result.output)
+    await ctx.post(result.output.reply)
     if result.output.needs_analyst:
         await ctx.wake('analyst')
 
