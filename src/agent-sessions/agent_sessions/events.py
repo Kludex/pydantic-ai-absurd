@@ -1,15 +1,19 @@
 from __future__ import annotations
 
 from datetime import datetime
-from enum import StrEnum
+from enum import Enum
 from typing import Any
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
 
-class EventKind(StrEnum):
-    """Open enum of event kinds. Libraries embedding this can add their own via plain strings."""
+class EventKind(str, Enum):
+    """Open enum of event kinds. Libraries embedding this can add their own via plain strings.
+
+    `str` base lets `EventKind.user_message == "user_message"` so downstream code
+    can treat these as plain strings; equivalent to 3.11's `StrEnum`.
+    """
 
     user_message = 'user_message'
     assistant_message = 'assistant_message'
@@ -22,7 +26,7 @@ class EventKind(StrEnum):
     snapshot_created = 'snapshot_created'
 
 
-class Visibility(StrEnum):
+class Visibility(str, Enum):
     public = 'public'
     internal = 'internal'
 
