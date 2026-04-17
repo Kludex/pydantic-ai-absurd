@@ -8,7 +8,7 @@ from typing import Any, Generic, Literal, Protocol, TypeVar
 from uuid import UUID
 
 import logfire
-from absurd_sdk import AsyncAbsurd, AsyncTaskContext, JsonValue
+from absurd_sdk import AsyncAbsurd, AsyncTaskContext, JsonValue, SuspendTask
 from psycopg import AsyncConnection
 from psycopg.rows import TupleRow
 from psycopg_pool import AsyncConnectionPool
@@ -21,7 +21,7 @@ from .session import Session
 AsyncPool = AsyncConnectionPool[AsyncConnection[TupleRow]]
 AgentDepsT = TypeVar('AgentDepsT')
 
-Concurrency = Literal['queue', 'parallel']
+Concurrency = Literal['queue', 'parallel', 'supersede']
 
 
 @dataclass(frozen=True)
@@ -265,6 +265,13 @@ class Workflow:
 
         Dedup is handled by Absurd's native `idempotency_key` - two wakes with the
         same `dedup_key` resolve to the same task_id without spawning twice.
+
+        With `concurrency="supersede"`, any brain of the same name currently leased
+        on this session is cancelled via `absurd.cancel_task` before we spawn. The
+        cancelled task's cleanup releases the lease, so the new spawn can acquire
+        it normally. Pending tasks that haven't yet taken the lease are not
+        touched - the common use case ("user retried, replace what's running") only
+        needs to cancel the live run.
         """
         session_id = session.id if isinstance(session, Session) else session
         input_payload: dict[str, JsonValue] = input or {}
@@ -276,6 +283,9 @@ class Workflow:
             session_id=str(session_id),
             concurrency=concurrency,
         ):
+            if concurrency == 'supersede':
+                await self._cancel_active_brain(session_id, brain_name)
+
             params: dict[str, JsonValue] = {
                 'session_id': str(session_id),
                 'input': input_payload,
@@ -291,6 +301,27 @@ class Workflow:
             task_id = spawned['task_id']
             task_id_str = str(task_id) if isinstance(task_id, UUID) else task_id
             return WakeHandle(task_id=task_id_str, dedup_key=key)
+
+    async def _cancel_active_brain(self, session_id: UUID, brain_name: str) -> None:
+        """Cancel the Absurd task holding the lease for `(session_id, brain_name)`.
+
+        If no brain is currently leased, this is a no-op. The cancellation is
+        best-effort: Absurd's `cancel_task` either succeeds or fails because the
+        task has already terminated, and in the latter case the lease will have
+        been released already.
+        """
+        async with self._pool.connection() as conn:
+            cur = await conn.execute(
+                """
+                SELECT running_task_id FROM agent_sessions.sessions
+                WHERE id = %s AND running_brain_name = %s AND running_task_id IS NOT NULL
+                """,
+                (session_id, brain_name),
+            )
+            row = await cur.fetchone()
+        if row is None:
+            return
+        await self._absurd.cancel_task(str(row[0]))
 
     def _register_with_absurd(self, definition: BrainDefinition) -> None:
         workflow = self
@@ -310,9 +341,6 @@ async def _run_brain(
     params: Mapping[str, JsonValue],
     ctx: AsyncTaskContext,
 ) -> JsonValue:
-    import sys
-
-    print(f'[_run_brain] entered task={ctx.task_id} params={params}', file=sys.stderr)
     session_id = _expect_uuid(params, 'session_id')
     raw_input = params.get('input') or {}
     if not isinstance(raw_input, dict):
@@ -333,7 +361,9 @@ async def _run_brain(
     # the conn the brain is itself trying to use. The lease pattern only touches
     # the pool for the brief CAS queries and never holds a conn between them.
     if concurrency == 'queue':
-        await _acquire_session_lease(workflow.pool, session_id, ctx, workflow._session_lease_poll_seconds)
+        await _acquire_session_lease(
+            workflow.pool, session_id, definition.name, ctx, workflow._session_lease_poll_seconds
+        )
         try:
             await _execute_brain_body(
                 workflow=workflow,
@@ -343,8 +373,16 @@ async def _run_brain(
                 input_payload=raw_input,
                 causation_id=causation_id,
             )
-        finally:
+        except SuspendTask:
+            # A durable sleep (ctx.sleep_for / await_event) isn't a brain finishing -
+            # the task will resume later and re-enter _run_brain. Keep the lease held
+            # so nothing barges in during the wait (and so `supersede` can still find
+            # a live lease to cancel).
+            raise
+        except BaseException:
             await _release_session_lease(workflow.pool, session_id, ctx.task_id)
+            raise
+        await _release_session_lease(workflow.pool, session_id, ctx.task_id)
     else:
         await _execute_brain_body(
             workflow=workflow,
@@ -363,6 +401,7 @@ _LEASE_POLL_STEP = 'agent_sessions:session_lease_poll'
 async def _acquire_session_lease(
     pool: AsyncPool,
     session_id: UUID,
+    brain_name: str,
     ctx: AsyncTaskContext,
     poll_seconds: float,
 ) -> None:
@@ -372,10 +411,11 @@ async def _acquire_session_lease(
     sleeps durably via `ctx.sleep_for(...)`, so a contended session doesn't keep a pool
     connection pinned and doesn't count against the worker's concurrency budget.
 
-    If this is a retry of a previous attempt that crashed without releasing, the stale
-    lease still points at our own task_id - we clear it ourselves before the CAS, which
-    is safe because only this task is running right now (Absurd only redelivers a run
-    once the previous one is marked failed).
+    The lease records both the task_id (lease owner) and the brain_name (so `supersede`
+    can target the right brain). If this is a retry of a previous attempt that crashed
+    without releasing, the stale lease still points at our own task_id - we clear it
+    ourselves before the CAS, which is safe because only this task is running right now
+    (Absurd only redelivers a run once the previous one is marked failed).
     """
     # ctx.task_id is typed `str` in absurd-sdk but arrives as a `uuid.UUID` at
     # runtime; stringify so the TEXT-column comparison doesn't hit
@@ -383,7 +423,9 @@ async def _acquire_session_lease(
     lease_owner = str(ctx.task_id)
     async with pool.connection() as conn:
         await conn.execute(
-            'UPDATE agent_sessions.sessions SET running_task_id = NULL WHERE id = %s AND running_task_id = %s',
+            'UPDATE agent_sessions.sessions '
+            'SET running_task_id = NULL, running_brain_name = NULL '
+            'WHERE id = %s AND running_task_id = %s',
             (session_id, lease_owner),
         )
     while True:
@@ -391,11 +433,11 @@ async def _acquire_session_lease(
             cur = await conn.execute(
                 """
                 UPDATE agent_sessions.sessions
-                SET running_task_id = %s
+                SET running_task_id = %s, running_brain_name = %s
                 WHERE id = %s AND running_task_id IS NULL
                 RETURNING 1
                 """,
-                (lease_owner, session_id),
+                (lease_owner, brain_name, session_id),
             )
             acquired = await cur.fetchone() is not None
         if acquired:
@@ -411,7 +453,7 @@ async def _release_session_lease(pool: AsyncPool, session_id: UUID, task_id: str
         await conn.execute(
             """
             UPDATE agent_sessions.sessions
-            SET running_task_id = NULL
+            SET running_task_id = NULL, running_brain_name = NULL
             WHERE id = %s AND running_task_id = %s
             """,
             (session_id, lease_owner),
@@ -454,6 +496,11 @@ async def _execute_brain_body(
 
         try:
             await definition.fn(brain_context)
+        except SuspendTask:
+            # Durable sleep / await_event: the task will resume and re-enter the
+            # brain, don't treat this as a failure.
+            span.set_attribute('outcome', 'suspended')
+            raise
         except BaseException as exc:
             span.record_exception(exc)
             span.set_attribute('outcome', 'failed')

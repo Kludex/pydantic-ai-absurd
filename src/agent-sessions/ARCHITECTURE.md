@@ -159,6 +159,10 @@ This is intentionally a lease, not a Postgres advisory lock. Advisory locks are 
 
 This is session-scoped, not brain-scoped. Two different sessions run fully in parallel. `concurrency="parallel"` skips the lock — useful for read-only brains or ones that write to their own scoped subtree.
 
+`concurrency="supersede"` uses the lease's second column (`running_brain_name`) to locate the currently-active brain for this `(session_id, brain_name)` pair and cancels its Absurd task via `absurd.cancel_task()` before spawning the replacement. The cancelled brain's exception handler releases the lease, the new spawn acquires it normally. Pending tasks that haven't yet taken the lease are not touched — the common case (a user retrying) only needs to cancel the live run.
+
+Durable sleeps inside a leased brain (e.g. `ctx.sleep_for(...)` or `ctx.await_event(...)`) keep the lease held. From the session's perspective the brain is "running and waiting," not "finished" — so nothing else can barge in during the wait, and `supersede` still finds a live lease to target.
+
 ## Schema migrations
 
 The canonical schema lives at `agent_sessions/schema/agent_sessions.sql` and represents the current library version. The last statement in that file is a `CREATE OR REPLACE FUNCTION agent_sessions.get_schema_version()` that returns the current version as a text literal. The running value of that function is how the database advertises "what version am I?"

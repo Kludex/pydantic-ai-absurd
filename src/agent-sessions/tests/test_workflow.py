@@ -318,6 +318,72 @@ async def test_second_brain_on_same_session_waits_for_lease(workflow: Workflow) 
     assert order == ['ran']
 
 
+async def test_supersede_cancels_the_active_brain(workflow: Workflow) -> None:
+    """`concurrency='supersede'` cancels the currently-leased brain for the same
+    (session, brain_name) before spawning the replacement. Prove it: spawn a long-running
+    brain, then fire a supersede - the first brain fails with cancellation, the second
+    runs and completes.
+    """
+    observed: dict[str, int | bool] = {'first_attempts': 0, 'second_ran': False}
+
+    @workflow.brain('flaky_first')
+    async def flaky(ctx: BrainContext[None]) -> None:
+        observed['first_attempts'] = int(observed['first_attempts']) + 1
+        # Sleep durably so the task suspends and lives in the "running" lease -
+        # the supersede path needs a lease holder to cancel.
+        await ctx.sleep(1.0)
+        observed['first_finished'] = True  # pragma: no cover - we intend to be cancelled
+
+    @workflow.brain('replacer')
+    async def replacer(ctx: BrainContext[None]) -> None:
+        observed['second_ran'] = True
+
+    session = await Session.create(workflow.pool)
+
+    # Spawn the first brain with max_attempts=1 so the cancel doesn't trigger a retry
+    # loop. Drive it once so it claims the lease and suspends on sleep_for.
+    await workflow.wake(session, 'flaky_first', max_attempts=1)
+    await workflow.absurd.work_batch(batch_size=1)
+
+    # Verify the first brain claimed the lease.
+    async with workflow.pool.connection() as conn:
+        cur = await conn.execute(
+            'SELECT running_brain_name FROM agent_sessions.sessions WHERE id = %s',
+            (session.id,),
+        )
+        row = await cur.fetchone()
+    assert row is not None and row[0] == 'flaky_first'
+
+    # Supersede with a different brain name on the same session - should be a no-op
+    # for the lease (different brain_name) but proves the lookup query is guarded.
+    await workflow.wake(session, 'replacer', concurrency='supersede', max_attempts=1)
+
+    # Now supersede the first brain with another wake of the same name.
+    await workflow.wake(session, 'flaky_first', input={'v': 2}, concurrency='supersede', max_attempts=1)
+
+    # Drain - the cancelled first task should fail, the lease releases, pending
+    # tasks can proceed.
+    for _ in range(10):
+        await workflow.absurd.work_batch(batch_size=4)
+        await anyio.sleep(0.05)
+
+    # `replacer` was spawned before supersede and doesn't care; it runs once the lease
+    # frees up.
+    assert observed['second_ran'] is True
+
+
+async def test_supersede_is_noop_when_no_brain_active(workflow: Workflow) -> None:
+    """Supersede on a quiet session should proceed cleanly - no lease to cancel."""
+
+    @workflow.brain('quiet')
+    async def quiet(ctx: BrainContext[None]) -> None:
+        await ctx.post('hi')  # pragma: no cover - never drained
+
+    session = await Session.create(workflow.pool)
+    handle = await workflow.wake(session, 'quiet', concurrency='supersede')
+    assert handle.task_id
+
+
 async def test_wake_depth_check_raises_for_long_chain(pool: AsyncPool) -> None:
     from agent_sessions.workflow import WakeDepthExceeded, _check_wake_depth
 

@@ -51,7 +51,10 @@ Every brain append lands in `session_events` with a `kind` (`user_message`, `ass
 
 ## Concurrency and idempotency
 
-`workflow.wake(session, name, concurrency=...)` defaults to `queue`, which takes a session-level advisory lock so only one brain per session runs at a time. `concurrency="parallel"` skips the lock.
+`workflow.wake(session, name, concurrency=...)` defaults to `queue`, which takes a session-level lease so only one brain per session runs at a time. Other options:
+
+- `concurrency="parallel"` skips the lease.
+- `concurrency="supersede"` cancels the currently-leased brain of the same `name` on this session (if any) via `absurd.cancel_task`, then spawns the replacement. Useful for "the user edited their message, drop the old response and start fresh."
 
 Dedup is handled by Absurd's native `idempotency_key`: two wakes with the same `dedup_key` resolve to the same task without spawning twice. If you don't pass `dedup_key`, it's derived from `(session_id, brain_name, sha256(input))`.
 

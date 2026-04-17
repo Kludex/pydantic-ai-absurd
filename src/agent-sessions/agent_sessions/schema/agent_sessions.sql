@@ -13,11 +13,15 @@ CREATE TABLE IF NOT EXISTS agent_sessions.sessions (
     id UUID PRIMARY KEY,
     status TEXT NOT NULL DEFAULT 'active',
     metadata JSONB NOT NULL DEFAULT '{}',
-    -- Lease column for single-active-brain enforcement when concurrency='queue'.
-    -- Holds the Absurd task_id of the running brain, or NULL when no brain is
-    -- active. A row-level CAS on this column replaces the advisory-lock pattern
-    -- so contended brains never pin a pool connection.
+    -- Lease columns for single-active-brain enforcement when concurrency='queue'.
+    -- Both set together when a brain takes the lease; both cleared on release.
+    -- `running_task_id` is the Absurd task_id of the active brain;
+    -- `running_brain_name` names which brain is running (needed to target a
+    -- specific brain in `concurrency='supersede'`). A row-level CAS on these
+    -- replaces the advisory-lock pattern so contended brains never pin a pool
+    -- connection.
     running_task_id TEXT,
+    running_brain_name TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -55,4 +59,4 @@ CREATE TABLE IF NOT EXISTS agent_sessions.session_snapshots (
 CREATE OR REPLACE FUNCTION agent_sessions.get_schema_version()
     RETURNS TEXT
     LANGUAGE SQL IMMUTABLE
-    AS $$ SELECT '0.0.1' $$;
+    AS $$ SELECT '0.0.2' $$;
