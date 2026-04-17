@@ -31,10 +31,3 @@ CREATE TABLE IF NOT EXISTS session_snapshots (
     PRIMARY KEY (session_id, up_to_sequence)
 );
 
-CREATE TABLE IF NOT EXISTS wake_dedup (
-    dedup_key TEXT PRIMARY KEY,
-    session_id UUID NOT NULL,
-    brain_name TEXT NOT NULL,
-    task_id UUID NOT NULL,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
-);

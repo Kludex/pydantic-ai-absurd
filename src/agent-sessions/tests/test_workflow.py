@@ -63,7 +63,7 @@ async def test_brain_runs_and_emits_lifecycle(workflow: Workflow) -> None:
 
     session = await Session.create(workflow.pool)
     handle = await workflow.wake(session, 'greeter')
-    assert not handle.deduplicated
+    assert handle.task_id
 
     await workflow.absurd.work_batch(batch_size=1)
 
@@ -246,8 +246,7 @@ async def test_deterministic_dedup_collapses_duplicate_wakes(workflow: Workflow)
     first = await workflow.wake(session, 'dedup_x', input={'k': 'v'})
     second = await workflow.wake(session, 'dedup_x', input={'k': 'v'})
     assert first.task_id == second.task_id
-    assert first.deduplicated is False
-    assert second.deduplicated is True
+    assert first.dedup_key == second.dedup_key
 
 
 async def test_explicit_dedup_key_collapses(workflow: Workflow) -> None:
@@ -261,17 +260,6 @@ async def test_explicit_dedup_key_collapses(workflow: Workflow) -> None:
     assert first.task_id == second.task_id
 
 
-async def test_supersede_cancels_existing_tasks(workflow: Workflow) -> None:
-    @workflow.brain('dedup_s')
-    async def _br(ctx: BrainContext[None]) -> None:
-        pass  # pragma: no cover
-
-    session = await Session.create(workflow.pool)
-    first = await workflow.wake(session, 'dedup_s', input={'v': 1})
-    second = await workflow.wake(session, 'dedup_s', input={'v': 2}, concurrency='supersede')
-    assert second.task_id != first.task_id
-
-
 async def test_wake_by_session_id_only(workflow: Workflow) -> None:
     @workflow.brain('dedup_w')
     async def _br(ctx: BrainContext[None]) -> None:
@@ -280,7 +268,6 @@ async def test_wake_by_session_id_only(workflow: Workflow) -> None:
     session = await Session.create(workflow.pool)
     handle = await workflow.wake(session.id, 'dedup_w')
     assert handle.task_id
-    assert not handle.deduplicated
 
 
 async def test_wake_depth_check_raises_for_long_chain(pool: AsyncPool) -> None:

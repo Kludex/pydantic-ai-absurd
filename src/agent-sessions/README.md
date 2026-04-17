@@ -49,12 +49,11 @@ await workflow.run()
 
 Every brain append lands in `session_events` with a `kind` (`user_message`, `assistant_message`, `tool_call`, `tool_result`, `status_update`, `brain_started/finished/failed`, `snapshot_created`), an `actor`, and a `visibility` of `public` or `internal`. `session.events(after=N, visibility=Visibility.public)` is the UI read pattern; `session.messages()` is the agent read pattern and filters to messages the LLM can consume.
 
-## Concurrency
+## Concurrency and idempotency
 
-`workflow.wake(session, name, concurrency=...)` defaults to `queue`, which takes a session-level advisory lock so only one brain per session runs at a time. Opt-outs:
+`workflow.wake(session, name, concurrency=...)` defaults to `queue`, which takes a session-level advisory lock so only one brain per session runs at a time. `concurrency="parallel"` skips the lock.
 
-- `concurrency="parallel"` skips the lock
-- `concurrency="supersede"` cancels any active brain on that session+name first
+Dedup is handled by Absurd's native `idempotency_key`: two wakes with the same `dedup_key` resolve to the same task without spawning twice. If you don't pass `dedup_key`, it's derived from `(session_id, brain_name, sha256(input))`.
 
 Chains propagate `causation_id` so you can trace who woke whom. `max_wake_depth` (default 20) bounds runaway loops.
 

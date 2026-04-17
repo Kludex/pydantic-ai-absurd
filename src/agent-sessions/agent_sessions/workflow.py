@@ -9,7 +9,7 @@ from uuid import UUID
 
 from absurd_sdk import AsyncAbsurd, AsyncTaskContext, JsonValue
 from psycopg import AsyncConnection
-from psycopg.rows import TupleRow, dict_row
+from psycopg.rows import TupleRow
 from psycopg_pool import AsyncConnectionPool
 from pydantic_ai.agent import AgentRunResult
 
@@ -20,14 +20,22 @@ from .session import Session
 AsyncPool = AsyncConnectionPool[AsyncConnection[TupleRow]]
 AgentDepsT = TypeVar('AgentDepsT')
 
-Concurrency = Literal['queue', 'parallel', 'supersede']
+Concurrency = Literal['queue', 'parallel']
 
 
 @dataclass(frozen=True)
 class WakeHandle:
+    """Handle returned by `Workflow.wake()`.
+
+    `task_id` is the Absurd task id - stable across duplicate wakes thanks to
+    Absurd's native idempotency on `dedup_key`. Calling `wake()` twice with the
+    same (implicit or explicit) `dedup_key` returns the same `task_id`; the
+    caller can't tell "spawned new" from "deduplicated" without querying
+    Absurd, which intentionally stays cheap.
+    """
+
     task_id: str
     dedup_key: str
-    deduplicated: bool
 
 
 @dataclass(frozen=True)
@@ -252,18 +260,12 @@ class Workflow:
     ) -> WakeHandle:
         """Idempotent brain trigger bound to this workflow's absurd client and pool.
 
-        See module docstring for concurrency semantics.
+        Dedup is handled by Absurd's native `idempotency_key` - two wakes with the
+        same `dedup_key` resolve to the same task_id without spawning twice.
         """
         session_id = session.id if isinstance(session, Session) else session
         input_payload: dict[str, JsonValue] = input or {}
         key = dedup_key or _deterministic_dedup_key(session_id, brain_name, input_payload)
-
-        existing = await _lookup_dedup(self._pool, key)
-        if existing is not None:
-            return WakeHandle(task_id=existing, dedup_key=key, deduplicated=True)
-
-        if concurrency == 'supersede':
-            await _cancel_active_brains(self._absurd, self._pool, session_id, brain_name)
 
         params: dict[str, JsonValue] = {
             'session_id': str(session_id),
@@ -277,11 +279,9 @@ class Workflow:
             idempotency_key=key,
             max_attempts=max_attempts,
         )
-
         task_id = spawned['task_id']
-        task_uuid = task_id if isinstance(task_id, UUID) else UUID(task_id)
-        await _record_dedup(self._pool, key, session_id, brain_name, task_uuid)
-        return WakeHandle(task_id=str(task_uuid), dedup_key=key, deduplicated=False)
+        task_id_str = str(task_id) if isinstance(task_id, UUID) else task_id
+        return WakeHandle(task_id=task_id_str, dedup_key=key)
 
     def _register_with_absurd(self, definition: BrainDefinition) -> None:
         workflow = self
@@ -436,42 +436,3 @@ def _expect_uuid(params: Mapping[str, JsonValue], key: str) -> UUID:
 def _deterministic_dedup_key(session_id: UUID, brain_name: str, input_payload: dict[str, JsonValue]) -> str:
     digest = hashlib.sha256(json.dumps(input_payload, sort_keys=True).encode()).hexdigest()
     return f'{session_id}:{brain_name}:{digest}'
-
-
-async def _lookup_dedup(pool: AsyncPool, key: str) -> str | None:
-    async with pool.connection() as conn:
-        cur = conn.cursor(row_factory=dict_row)
-        await cur.execute('SELECT task_id FROM wake_dedup WHERE dedup_key = %s', (key,))
-        row = await cur.fetchone()
-    if row is None:
-        return None
-    return str(row['task_id'])
-
-
-async def _record_dedup(pool: AsyncPool, key: str, session_id: UUID, brain_name: str, task_id: UUID) -> None:
-    async with pool.connection() as conn:
-        await conn.execute(
-            """
-            INSERT INTO wake_dedup (dedup_key, session_id, brain_name, task_id)
-            VALUES (%s, %s, %s, %s)
-            ON CONFLICT (dedup_key) DO NOTHING
-            """,
-            (key, session_id, brain_name, task_id),
-        )
-
-
-async def _cancel_active_brains(
-    absurd: AsyncAbsurd,
-    pool: AsyncPool,
-    session_id: UUID,
-    brain_name: str,
-) -> None:
-    async with pool.connection() as conn:
-        cur = conn.cursor(row_factory=dict_row)
-        await cur.execute(
-            'SELECT task_id FROM wake_dedup WHERE session_id = %s AND brain_name = %s',
-            (session_id, brain_name),
-        )
-        rows = await cur.fetchall()
-    for row in rows:
-        await absurd.cancel_task(str(row['task_id']))
