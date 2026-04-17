@@ -159,6 +159,27 @@ This is intentionally a lease, not a Postgres advisory lock. Advisory locks are 
 
 This is session-scoped, not brain-scoped. Two different sessions run fully in parallel. `concurrency="parallel"` skips the lock — useful for read-only brains or ones that write to their own scoped subtree.
 
+## Schema migrations
+
+The canonical schema lives at `agent_sessions/schema/agent_sessions.sql` and represents the current library version. The last statement in that file is a `CREATE OR REPLACE FUNCTION agent_sessions.get_schema_version()` that returns the current version as a text literal. The running value of that function is how the database advertises "what version am I?"
+
+`apply_migrations(pool)` does the right thing depending on state:
+
+- **Fresh install** (function doesn't exist): run `agent_sessions.sql` inside a transaction. Creates every table and registers the version function.
+- **Up-to-date** (function returns the current version): no-op.
+- **Older version**: walk `agent_sessions/schema/migrations/<from>-<to>.sql` from the installed version to the current one. Each migration runs in its own transaction and ends by redefining `get_schema_version()` to its new value, so a failure leaves the database at a known intermediate version.
+
+Invariants enforced at import time:
+
+- Every migration filename must match `<from>-<to>.sql` where both ends are semver-ish (`MAJOR.MINOR.PATCH`).
+- No two migrations may share the same `from` version - a branching history is a deploy error, not a "pick one" situation.
+
+Invariants enforced at runtime:
+
+- If the database reports a version for which we don't ship an outgoing migration, `apply_migrations()` raises and touches nothing. This is the "someone downgraded the library" case - manual intervention is safer than guessing.
+
+`apply_migrations()` is not concurrency-safe across processes. Run it once from your deployment's release hook, not from every worker on startup.
+
 ## Why not store events in Absurd's tables?
 
 Absurd's task state is tied to a single task instance. If a task retries, its checkpoints carry over, but the task_id changes if you spawn a new task for a chained brain. A user-observable conversation needs to span tasks — the `user_message` the browser POSTed is part of the same conversation as the `assistant_message` three brains later, even though each brain is a distinct Absurd task.

@@ -1,3 +1,12 @@
+-- Canonical install for the agent_sessions schema at the current library
+-- version. Runs on a fresh database with no `agent_sessions` schema.
+--
+-- For existing databases, `apply_migrations()` detects the installed version
+-- via `agent_sessions.get_schema_version()` and applies the deltas under
+-- `schema/migrations/<from>-<to>.sql` in order. This file always represents
+-- the current version; the migrations directory lets existing deployments
+-- roll forward without reinstalling.
+
 CREATE SCHEMA IF NOT EXISTS agent_sessions;
 
 CREATE TABLE IF NOT EXISTS agent_sessions.sessions (
@@ -39,3 +48,11 @@ CREATE TABLE IF NOT EXISTS agent_sessions.session_snapshots (
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     PRIMARY KEY (session_id, up_to_sequence)
 );
+
+-- Version marker. Each release (or each breaking migration) updates this
+-- function to return a new version string. `apply_migrations()` reads it to
+-- decide which deltas to apply.
+CREATE OR REPLACE FUNCTION agent_sessions.get_schema_version()
+    RETURNS TEXT
+    LANGUAGE SQL IMMUTABLE
+    AS $$ SELECT '0.0.1' $$;

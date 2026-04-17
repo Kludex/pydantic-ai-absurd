@@ -49,11 +49,17 @@ pydantic-ai-absurd = { workspace = true }
 
 [tool.hatch.build.targets.wheel]
 packages = ["agent_sessions"]
-artifacts = ["agent_sessions/schema/migrations.sql"]
+artifacts = [
+    "agent_sessions/schema/agent_sessions.sql",
+    "agent_sessions/schema/migrations/*.sql",
+]
 
 [tool.hatch.build.targets.sdist]
 include = ["agent_sessions", "README.md", "pyproject.toml"]
-artifacts = ["agent_sessions/schema/migrations.sql"]
+artifacts = [
+    "agent_sessions/schema/agent_sessions.sql",
+    "agent_sessions/schema/migrations/*.sql",
+]
 
 [tool.ruff]
 line-length = 120
