@@ -59,5 +59,6 @@ Chains propagate `causation_id` so you can trace who woke whom. `max_wake_depth`
 
 ## See also
 
-- Repository `README.md` for the architecture diagram and the Vercel AI + Starlette example.
+- [`ARCHITECTURE.md`](./ARCHITECTURE.md) for the database schema, runtime flow, idempotency model, and the reasoning behind the event log living outside Absurd's tables.
+- Repository `README.md` for the high-level architecture diagram and the Vercel AI + Starlette example.
 - `pydantic-ai-absurd` for the underlying durable-execution adapter.
