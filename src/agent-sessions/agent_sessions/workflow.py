@@ -365,10 +365,10 @@ async def _acquire_session_lease(
     sleeps durably via `ctx.sleep_for(...)`, so a contended session doesn't keep a pool
     connection pinned and doesn't count against the worker's concurrency budget.
     """
-    # ctx.task_id is typed str in the SDK but arrives as a uuid.UUID at runtime.
-    # Stringify at the bind site so the TEXT column comparison doesn't trigger
-    # an `operator does not exist: text = uuid` error.
-    task_id_text = str(ctx.task_id)
+    # ctx.task_id is typed `str` in absurd-sdk but arrives as a `uuid.UUID` at
+    # runtime; stringify so the TEXT-column comparison doesn't hit
+    # `operator does not exist: text = uuid`.
+    lease_owner = str(ctx.task_id)
     while True:
         async with pool.connection() as conn:
             cur = await conn.execute(
@@ -378,7 +378,7 @@ async def _acquire_session_lease(
                 WHERE id = %s AND (running_task_id IS NULL OR running_task_id = %s)
                 RETURNING 1
                 """,
-                (task_id_text, session_id, task_id_text),
+                (lease_owner, session_id, lease_owner),
             )
             acquired = await cur.fetchone() is not None
         if acquired:
@@ -387,9 +387,9 @@ async def _acquire_session_lease(
 
 
 async def _release_session_lease(pool: AsyncPool, session_id: UUID, task_id: str) -> None:
-    """Release the lease. `WHERE running_task_id = task_id` prevents us from clearing a
+    """Release the lease. The `running_task_id = ?` guard prevents us from clearing a
     lease that's been force-taken by another task after a poison-cleanup."""
-    task_id_text = str(task_id)
+    lease_owner = str(task_id)
     async with pool.connection() as conn:
         await conn.execute(
             """
@@ -397,7 +397,7 @@ async def _release_session_lease(pool: AsyncPool, session_id: UUID, task_id: str
             SET running_task_id = NULL
             WHERE id = %s AND running_task_id = %s
             """,
-            (session_id, task_id_text),
+            (session_id, lease_owner),
         )
 
 
