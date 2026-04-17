@@ -364,21 +364,31 @@ async def _acquire_session_lease(
     Each poll is a single, briefly-held pool connection. Between polls the Absurd task
     sleeps durably via `ctx.sleep_for(...)`, so a contended session doesn't keep a pool
     connection pinned and doesn't count against the worker's concurrency budget.
+
+    If this is a retry of a previous attempt that crashed without releasing, the stale
+    lease still points at our own task_id - we clear it ourselves before the CAS, which
+    is safe because only this task is running right now (Absurd only redelivers a run
+    once the previous one is marked failed).
     """
     # ctx.task_id is typed `str` in absurd-sdk but arrives as a `uuid.UUID` at
     # runtime; stringify so the TEXT-column comparison doesn't hit
     # `operator does not exist: text = uuid`.
     lease_owner = str(ctx.task_id)
+    async with pool.connection() as conn:
+        await conn.execute(
+            'UPDATE agent_sessions.sessions SET running_task_id = NULL WHERE id = %s AND running_task_id = %s',
+            (session_id, lease_owner),
+        )
     while True:
         async with pool.connection() as conn:
             cur = await conn.execute(
                 """
                 UPDATE agent_sessions.sessions
                 SET running_task_id = %s
-                WHERE id = %s AND (running_task_id IS NULL OR running_task_id = %s)
+                WHERE id = %s AND running_task_id IS NULL
                 RETURNING 1
                 """,
-                (lease_owner, session_id, lease_owner),
+                (lease_owner, session_id),
             )
             acquired = await cur.fetchone() is not None
         if acquired:
