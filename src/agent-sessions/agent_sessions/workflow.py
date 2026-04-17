@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import Any, Generic, Literal, Protocol, TypeVar
 from uuid import UUID
 
+import logfire
 from absurd_sdk import AsyncAbsurd, AsyncTaskContext, JsonValue
 from psycopg import AsyncConnection
 from psycopg.rows import TupleRow
@@ -269,21 +270,27 @@ class Workflow:
         input_payload: dict[str, JsonValue] = input or {}
         key = dedup_key or _deterministic_dedup_key(session_id, brain_name, input_payload)
 
-        params: dict[str, JsonValue] = {
-            'session_id': str(session_id),
-            'input': input_payload,
-            'causation_id': causation_id,
-            'concurrency': concurrency,
-        }
-        spawned = await self._absurd.spawn(
-            self.task_name(brain_name),
-            params,
-            idempotency_key=key,
-            max_attempts=max_attempts,
-        )
-        task_id = spawned['task_id']
-        task_id_str = str(task_id) if isinstance(task_id, UUID) else task_id
-        return WakeHandle(task_id=task_id_str, dedup_key=key)
+        with logfire.span(
+            'wake brain {brain_name}',
+            brain_name=brain_name,
+            session_id=str(session_id),
+            concurrency=concurrency,
+        ):
+            params: dict[str, JsonValue] = {
+                'session_id': str(session_id),
+                'input': input_payload,
+                'causation_id': causation_id,
+                'concurrency': concurrency,
+            }
+            spawned = await self._absurd.spawn(
+                self.task_name(brain_name),
+                params,
+                idempotency_key=key,
+                max_attempts=max_attempts,
+            )
+            task_id = spawned['task_id']
+            task_id_str = str(task_id) if isinstance(task_id, UUID) else task_id
+            return WakeHandle(task_id=task_id_str, dedup_key=key)
 
     def _register_with_absurd(self, definition: BrainDefinition) -> None:
         workflow = self
@@ -420,53 +427,62 @@ async def _execute_brain_body(
     input_payload: Mapping[str, JsonValue],
     causation_id: int | None,
 ) -> None:
-    started = await session.append(
-        kind=EventKind.brain_started,
-        actor=f'brain:{definition.name}',
-        payload={'brain': definition.name},
-        visibility=Visibility.internal,
-        causation_id=causation_id,
-    )
-    brain_context: BrainContext[Any] = BrainContext(
-        workflow=workflow,
-        name=definition.name,
-        absurd_ctx=ctx,
-        session=session,
-        invocation=BrainInvocation(
-            session_id=session.id,
-            input=dict(input_payload),
-            causation_id=started.sequence,
-        ),
-    )
-
-    try:
-        await definition.fn(brain_context)
-    except BaseException as exc:
-        await session.append(
-            kind=EventKind.brain_failed,
+    with logfire.span(
+        'run brain {brain_name}',
+        brain_name=definition.name,
+        session_id=str(session.id),
+        task_id=str(ctx.task_id),
+    ) as span:
+        started = await session.append(
+            kind=EventKind.brain_started,
             actor=f'brain:{definition.name}',
-            payload={'error': repr(exc)},
+            payload={'brain': definition.name},
+            visibility=Visibility.internal,
+            causation_id=causation_id,
+        )
+        brain_context: BrainContext[Any] = BrainContext(
+            workflow=workflow,
+            name=definition.name,
+            absurd_ctx=ctx,
+            session=session,
+            invocation=BrainInvocation(
+                session_id=session.id,
+                input=dict(input_payload),
+                causation_id=started.sequence,
+            ),
+        )
+
+        try:
+            await definition.fn(brain_context)
+        except BaseException as exc:
+            span.record_exception(exc)
+            span.set_attribute('outcome', 'failed')
+            await session.append(
+                kind=EventKind.brain_failed,
+                actor=f'brain:{definition.name}',
+                payload={'error': repr(exc)},
+                visibility=Visibility.internal,
+                causation_id=started.sequence,
+            )
+            if workflow._on_poison is not None:
+                await workflow._on_poison(
+                    PoisonEvent(
+                        session_id=session.id,
+                        brain_name=definition.name,
+                        task_id=ctx.task_id,
+                        error=repr(exc),
+                    )
+                )
+            raise
+
+        span.set_attribute('outcome', 'finished')
+        await session.append(
+            kind=EventKind.brain_finished,
+            actor=f'brain:{definition.name}',
+            payload={'brain': definition.name},
             visibility=Visibility.internal,
             causation_id=started.sequence,
         )
-        if workflow._on_poison is not None:
-            await workflow._on_poison(
-                PoisonEvent(
-                    session_id=session.id,
-                    brain_name=definition.name,
-                    task_id=ctx.task_id,
-                    error=repr(exc),
-                )
-            )
-        raise
-
-    await session.append(
-        kind=EventKind.brain_finished,
-        actor=f'brain:{definition.name}',
-        payload={'brain': definition.name},
-        visibility=Visibility.internal,
-        causation_id=started.sequence,
-    )
 
 
 async def _check_wake_depth(

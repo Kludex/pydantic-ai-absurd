@@ -38,6 +38,7 @@ name = "agent-sessions"
 version = "0.0.1"
 source = { editable = "src/agent-sessions" }
 dependencies = [
+    { name = "logfire" },
     { name = "psycopg", extra = ["binary", "pool"] },
     { name = "pydantic" },
     { name = "pydantic-ai-absurd" },
@@ -56,6 +57,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "logfire", specifier = ">=4.0" },
     { name = "psycopg", extras = ["binary", "pool"], specifier = ">=3.2" },
     { name = "pydantic", specifier = ">=2.11" },
     { name = "pydantic-ai-absurd", editable = "src/pydantic-ai-absurd" },

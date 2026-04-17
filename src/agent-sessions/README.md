@@ -57,6 +57,10 @@ Dedup is handled by Absurd's native `idempotency_key`: two wakes with the same `
 
 Chains propagate `causation_id` so you can trace who woke whom. `max_wake_depth` (default 20) bounds runaway loops.
 
+## Observability
+
+Every `workflow.wake(...)` call and every brain body execution is wrapped in a [Logfire](https://logfire.pydantic.dev) span. Configure logfire in your worker process (`logfire.configure()`) and brain runs show up as spans with `brain_name`, `session_id`, `task_id`, and a `finished` / `failed` outcome - exceptions are recorded with their stack trace. Combined with pydantic-ai's built-in logfire integration you get model calls and tool calls as child spans under the brain, which is the UI for this package.
+
 ## See also
 
 - [`ARCHITECTURE.md`](./ARCHITECTURE.md) for the database schema, runtime flow, idempotency model, and the reasoning behind the event log living outside Absurd's tables.

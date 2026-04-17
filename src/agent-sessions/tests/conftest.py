@@ -5,6 +5,7 @@ from collections.abc import AsyncIterator, Iterator
 from pathlib import Path
 from uuid import uuid4
 
+import logfire
 import psycopg
 import pytest
 from absurd_sdk import AsyncAbsurd
@@ -33,6 +34,14 @@ def _normalize_dsn(url: str) -> str:
     if url.startswith('postgresql+psycopg2://'):
         return 'postgresql://' + url.split('://', 1)[1]
     return url  # pragma: no cover
+
+
+@pytest.fixture(scope='session', autouse=True)
+def _configure_logfire() -> None:
+    """Spans emit normally but nothing hits the network - silences the
+    `LogfireNotConfiguredWarning` that otherwise fails tests with
+    `filterwarnings = ["error"]`."""
+    logfire.configure(send_to_logfire=False)
 
 
 @pytest.fixture(scope='session')
