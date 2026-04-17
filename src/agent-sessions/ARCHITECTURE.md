@@ -2,14 +2,16 @@
 
 ## The two axes
 
-Two orthogonal things live in Postgres when you use this package:
+Two orthogonal things live in Postgres when you use this package, both namespaced to avoid colliding with your application tables:
 
 - **Absurd's tables** (`absurd.*` schema) — "who is doing which work, and what's its checkpoint state." One row per in-flight task, one row per `ctx.step()` call. Owned by Absurd; we never read or write these directly.
-- **Our tables** (`sessions`, `session_events`, `session_snapshots`) — "what is the user-observable conversation, regardless of who authored it and across which task retries." Durable, append-only, agent-facing.
+- **Our tables** (`agent_sessions.*` schema) — `sessions`, `session_events`, `session_snapshots`. "What is the user-observable conversation, regardless of who authored it and across which task retries." Durable, append-only, agent-facing.
 
-One chat turn might retry through three Absurd tasks (each with its own checkpoint state), but produce exactly one row in `session_events` — the final assistant message. Absurd's tables can't express that; that's why a separate event log exists.
+One chat turn might retry through three Absurd tasks (each with its own checkpoint state), but produce exactly one row in `agent_sessions.session_events` — the final assistant message. Absurd's tables can't express that; that's why a separate event log exists.
 
 ## Data model
+
+All tables live under the `agent_sessions` Postgres schema; the diagram below elides the prefix for readability.
 
 ```mermaid
 erDiagram
@@ -61,7 +63,7 @@ The central append-only log. Every append goes through `Session.append(...)`, wh
 2. `SELECT COALESCE(MAX(sequence), 0) + 1` to get the next sequence.
 3. Inserts the row.
 4. `UPDATE sessions SET updated_at = now()`.
-5. Fires `pg_notify('session_<hex>', '<sequence>')` so `Session.listen()` consumers see it on commit.
+5. Fires `pg_notify('agent_sessions_<hex>', '<sequence>')` so `Session.listen()` consumers see it on commit.
 
 All of that runs in a single transaction; commit makes the row and the notify visible together. The advisory lock guarantees there are no `(session_id, sequence)` collisions without needing a retry loop.
 

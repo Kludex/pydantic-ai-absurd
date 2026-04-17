@@ -57,7 +57,7 @@ class Session:
         session_id = uuid4()
         async with pool.connection() as conn:
             await conn.execute(
-                'INSERT INTO sessions (id, metadata) VALUES (%s, %s)',
+                'INSERT INTO agent_sessions.sessions (id, metadata) VALUES (%s, %s)',
                 (session_id, Jsonb(metadata or {})),
             )
         return cls(pool, session_id)
@@ -65,7 +65,7 @@ class Session:
     @classmethod
     async def load(cls, pool: AsyncPool, session_id: UUID) -> Session:
         async with pool.connection() as conn:
-            cur = await conn.execute('SELECT 1 FROM sessions WHERE id = %s', (session_id,))
+            cur = await conn.execute('SELECT 1 FROM agent_sessions.sessions WHERE id = %s', (session_id,))
             row = await cur.fetchone()
             if row is None:
                 raise LookupError(f'session {session_id} not found')
@@ -93,7 +93,8 @@ class Session:
                 )
                 cur = conn.cursor(row_factory=dict_row)
                 await cur.execute(
-                    'SELECT COALESCE(MAX(sequence), 0) + 1 AS next_seq FROM session_events WHERE session_id = %s',
+                    'SELECT COALESCE(MAX(sequence), 0) + 1 AS next_seq '
+                    'FROM agent_sessions.session_events WHERE session_id = %s',
                     (self._id,),
                 )
                 seq_row = await cur.fetchone()
@@ -102,7 +103,7 @@ class Session:
 
                 await cur.execute(
                     """
-                    INSERT INTO session_events
+                    INSERT INTO agent_sessions.session_events
                         (session_id, sequence, kind, actor, visibility, payload_version,
                          payload, causation_id, supersedes)
                     VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
@@ -125,14 +126,14 @@ class Session:
                 created_at = created['created_at']
 
                 await conn.execute(
-                    'UPDATE sessions SET updated_at = now() WHERE id = %s',
+                    'UPDATE agent_sessions.sessions SET updated_at = now() WHERE id = %s',
                     (self._id,),
                 )
                 # Fire pg_notify for anyone in listen(); fired inside the same transaction
                 # so listeners don't see the notify before the row is visible.
                 await conn.execute(
                     'SELECT pg_notify(%s, %s)',
-                    (f'session_{self._id.hex}', str(sequence)),
+                    (f'agent_sessions_{self._id.hex}', str(sequence)),
                 )
 
         return SessionEvent(
@@ -158,7 +159,7 @@ class Session:
         query = [
             'SELECT session_id, sequence, kind, actor, visibility, payload_version,',
             '       payload, causation_id, supersedes, created_at',
-            'FROM session_events',
+            'FROM agent_sessions.session_events',
             'WHERE session_id = %s AND sequence > %s',
         ]
         params: list[Any] = [self._id, after]
@@ -182,7 +183,7 @@ class Session:
             await cur.execute(
                 """
                 SELECT session_id, up_to_sequence, summary_payload, created_at
-                FROM session_snapshots
+                FROM agent_sessions.session_snapshots
                 WHERE session_id = %s
                 ORDER BY up_to_sequence DESC
                 LIMIT 1
@@ -199,7 +200,7 @@ class Session:
             cur = conn.cursor(row_factory=dict_row)
             await cur.execute(
                 """
-                INSERT INTO session_snapshots (session_id, up_to_sequence, summary_payload)
+                INSERT INTO agent_sessions.session_snapshots (session_id, up_to_sequence, summary_payload)
                 VALUES (%s, %s, %s)
                 RETURNING created_at
                 """,
@@ -269,7 +270,7 @@ async def _listen_iterator(
     started from, so we must not issue unrelated queries on that same connection
     between yields.
     """
-    channel = f'session_{session_id.hex}'
+    channel = f'agent_sessions_{session_id.hex}'
     async with await AsyncConnection.connect(conninfo, autocommit=True) as listen_conn:
         await listen_conn.execute(f'LISTEN {channel}')
         if ready is not None:
@@ -283,7 +284,7 @@ async def _listen_iterator(
                     """
                     SELECT session_id, sequence, kind, actor, visibility, payload_version,
                            payload, causation_id, supersedes, created_at
-                    FROM session_events
+                    FROM agent_sessions.session_events
                     WHERE session_id = %s AND sequence = %s
                     """,
                     (session_id, seq),

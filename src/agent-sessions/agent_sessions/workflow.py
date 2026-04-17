@@ -414,7 +414,7 @@ async def _check_wake_depth(
         while current is not None:
             cur = conn.cursor()
             await cur.execute(
-                'SELECT causation_id FROM session_events WHERE session_id = %s AND sequence = %s',
+                'SELECT causation_id FROM agent_sessions.session_events WHERE session_id = %s AND sequence = %s',
                 (session_id, current),
             )
             row = await cur.fetchone()
