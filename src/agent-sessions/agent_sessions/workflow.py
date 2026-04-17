@@ -5,7 +5,7 @@ import json
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from typing import Any, Generic, Literal, Protocol, TypeVar
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import logfire
 from absurd_sdk import AsyncAbsurd, AsyncTaskContext, JsonValue, SuspendTask
@@ -275,7 +275,15 @@ class Workflow:
         """
         session_id = session.id if isinstance(session, Session) else session
         input_payload: dict[str, JsonValue] = input or {}
-        key = dedup_key or _deterministic_dedup_key(session_id, brain_name, input_payload)
+        # Absurd's idempotency record outlives cancellation: if we reused the
+        # same key after cancelling, spawn would return the cancelled task's id
+        # instead of creating the replacement. Supersede explicitly wants a
+        # *new* task every call, so we mint a fresh key and ignore any caller-
+        # supplied dedup_key (dedup and supersede are mutually exclusive).
+        if concurrency == 'supersede':
+            key = f'{session_id}:{brain_name}:supersede:{uuid4()}'
+        else:
+            key = dedup_key or _deterministic_dedup_key(session_id, brain_name, input_payload)
 
         with logfire.span(
             'wake brain {brain_name}',
@@ -305,16 +313,35 @@ class Workflow:
     async def _cancel_active_brain(self, session_id: UUID, brain_name: str) -> None:
         """Cancel the Absurd task holding the lease for `(session_id, brain_name)`.
 
-        If no brain is currently leased, this is a no-op. The cancellation is
-        best-effort: Absurd's `cancel_task` either succeeds or fails because the
-        task has already terminated, and in the latter case the lease will have
-        been released already.
+        We clear the lease row *before* firing `cancel_task`. A brain that's
+        suspended inside `ctx.sleep_for` (or any other durable wait) won't run
+        any Python cleanup when Absurd cancels it - there's no live stack to
+        execute the `except BaseException: _release_session_lease(...)` branch
+        in `_run_brain`. Clearing the lease here means a suspended-then-
+        cancelled brain doesn't strand the session as "running" forever.
+
+        We use a CTE so the clear and the read of the cancelled task_id
+        happen in the same statement: no race where a just-released lease is
+        re-taken between SELECT and UPDATE, and we always cancel at most the
+        task we actually evicted. The CTE captures the pre-update row; the
+        outer UPDATE wipes the lease.
         """
         async with self._pool.connection() as conn:
             cur = await conn.execute(
                 """
-                SELECT running_task_id FROM agent_sessions.sessions
-                WHERE id = %s AND running_brain_name = %s AND running_task_id IS NOT NULL
+                WITH victim AS (
+                    SELECT id, running_task_id
+                    FROM agent_sessions.sessions
+                    WHERE id = %s
+                      AND running_brain_name = %s
+                      AND running_task_id IS NOT NULL
+                    FOR UPDATE
+                )
+                UPDATE agent_sessions.sessions AS s
+                SET running_task_id = NULL, running_brain_name = NULL
+                FROM victim
+                WHERE s.id = victim.id
+                RETURNING victim.running_task_id
                 """,
                 (session_id, brain_name),
             )
@@ -353,14 +380,16 @@ async def _run_brain(
     session = await Session.load(workflow.pool, session_id)
     await _check_wake_depth(workflow.pool, session_id, causation_id, workflow._max_wake_depth)
 
-    # Single-active-brain enforcement when concurrency == 'queue': use a row-level
-    # lease on `agent_sessions.sessions.running_task_id`. Postgres advisory locks
-    # would be simpler but they're bound to the connection that acquired them, so
-    # holding one for the brain's lifetime pins a pool connection - under concurrent
-    # sessions that starves the pool and deadlocks against `session.append()` on
-    # the conn the brain is itself trying to use. The lease pattern only touches
-    # the pool for the brief CAS queries and never holds a conn between them.
-    if concurrency == 'queue':
+    # Both 'queue' and 'supersede' enforce single-active-brain on the session via a
+    # row-level lease on `agent_sessions.sessions.running_task_id`. 'supersede' also
+    # takes the lease - otherwise a supersede'd task wouldn't write running_brain_name,
+    # and a subsequent supersede call would find nothing to cancel. Postgres advisory
+    # locks would be simpler but they're bound to the connection that acquired them,
+    # so holding one for the brain's lifetime pins a pool connection - under concurrent
+    # sessions that starves the pool and deadlocks against `session.append()` on the
+    # conn the brain is itself trying to use. The lease pattern only touches the pool
+    # for the brief CAS queries and never holds a conn between them.
+    if concurrency in ('queue', 'supersede'):
         await _acquire_session_lease(
             workflow.pool, session_id, definition.name, ctx, workflow._session_lease_poll_seconds
         )

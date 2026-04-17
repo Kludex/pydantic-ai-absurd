@@ -384,6 +384,103 @@ async def test_supersede_is_noop_when_no_brain_active(workflow: Workflow) -> Non
     assert handle.task_id
 
 
+async def test_supersede_clears_lease_when_cancelling_suspended_brain(workflow: Workflow) -> None:
+    """A brain suspended inside `ctx.sleep_for` has no live Python stack, so when Absurd
+    cancels it the `except BaseException: _release_session_lease(...)` branch in
+    `_run_brain` never runs. `_cancel_active_brain` must clear the lease itself or the
+    session would be stranded as "running" forever.
+    """
+
+    @workflow.brain('sleeper')
+    async def sleeper(ctx: BrainContext[None]) -> None:
+        await ctx.sleep(5.0)  # pragma: no cover - cancelled before completion
+
+    session = await Session.create(workflow.pool)
+    await workflow.wake(session, 'sleeper', max_attempts=1)
+    await workflow.absurd.work_batch(batch_size=1)
+
+    async with workflow.pool.connection() as conn:
+        cur = await conn.execute(
+            'SELECT running_task_id, running_brain_name FROM agent_sessions.sessions WHERE id = %s',
+            (session.id,),
+        )
+        row = await cur.fetchone()
+    assert row is not None and row[0] is not None and row[1] == 'sleeper'
+
+    # Supersede cancels the suspended brain. Because the brain is suspended, no
+    # Python cleanup runs - `_cancel_active_brain` must clear the lease itself.
+    await workflow.wake(session, 'sleeper', input={'v': 2}, concurrency='supersede', max_attempts=1)
+
+    async with workflow.pool.connection() as conn:
+        cur = await conn.execute(
+            'SELECT running_task_id, running_brain_name FROM agent_sessions.sessions WHERE id = %s',
+            (session.id,),
+        )
+        row = await cur.fetchone()
+    # The lease must be clear (or held by the replacement) - it must NOT still point at
+    # the cancelled task. The replacement hasn't been drained yet, so the lease is free.
+    assert row is not None
+    assert row[0] is None
+    assert row[1] is None
+
+
+async def test_supersede_replacement_writes_running_brain_name(workflow: Workflow) -> None:
+    """Supersede'd tasks still enforce the single-active-brain lease. If they didn't,
+    a second supersede call on the same session wouldn't find `running_brain_name` and
+    would fail to cancel the replacement. Prove the replacement writes the lease by
+    firing two supersedes in sequence and checking the second one cancels the first.
+    """
+    attempts: list[int] = []
+
+    @workflow.brain('chain')
+    async def chain(ctx: BrainContext[None]) -> None:
+        attempts.append(int(ctx.input.get('v') or 0))
+        await ctx.sleep(5.0)  # pragma: no cover - we always supersede
+
+    session = await Session.create(workflow.pool)
+
+    await workflow.wake(session, 'chain', input={'v': 1}, concurrency='supersede', max_attempts=1)
+    await workflow.absurd.work_batch(batch_size=1)
+
+    async with workflow.pool.connection() as conn:
+        cur = await conn.execute(
+            'SELECT running_brain_name FROM agent_sessions.sessions WHERE id = %s',
+            (session.id,),
+        )
+        row = await cur.fetchone()
+    # First supersede'd task must have claimed the lease, otherwise the next supersede
+    # has nothing to find.
+    assert row is not None and row[0] == 'chain'
+
+    # Second supersede should locate and cancel the first replacement.
+    await workflow.wake(session, 'chain', input={'v': 2}, concurrency='supersede', max_attempts=1)
+    for _ in range(10):
+        await workflow.absurd.work_batch(batch_size=4)
+        await anyio.sleep(0.05)
+
+    assert 2 in attempts
+
+
+async def test_supersede_uses_fresh_idempotency_key(workflow: Workflow) -> None:
+    """Absurd's idempotency record survives cancellation - if supersede reused the
+    deterministic `(session, brain, input-hash)` key, the spawn after the cancel would
+    resolve to the cancelled task_id instead of creating a new one. Two supersedes with
+    the same input must produce distinct task_ids.
+    """
+
+    @workflow.brain('same_input')
+    async def same_input(ctx: BrainContext[None]) -> None:
+        await ctx.sleep(5.0)  # pragma: no cover
+
+    session = await Session.create(workflow.pool)
+    first = await workflow.wake(session, 'same_input', input={'v': 1}, concurrency='supersede', max_attempts=1)
+    await workflow.absurd.work_batch(batch_size=1)
+    second = await workflow.wake(session, 'same_input', input={'v': 1}, concurrency='supersede', max_attempts=1)
+
+    assert first.task_id != second.task_id
+    assert first.dedup_key != second.dedup_key
+
+
 async def test_wake_depth_check_raises_for_long_chain(pool: AsyncPool) -> None:
     from agent_sessions.workflow import WakeDepthExceeded, _check_wake_depth
 
