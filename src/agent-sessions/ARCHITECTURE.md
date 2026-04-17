@@ -156,8 +156,6 @@ By default, `workflow.wake(session, name)` enqueues with `concurrency="queue"` �
 
 This is session-scoped, not brain-scoped. Two different sessions run fully in parallel. `concurrency="parallel"` skips the lock — useful for read-only brains or ones that write to their own scoped subtree.
 
-(An earlier design had `concurrency="supersede"` to cancel an active brain and replace it. That relied on a lookup table we've since dropped; reintroducing it cleanly needs a design for finding active tasks for a given `(session_id, brain_name)` tuple directly against Absurd's queue table. Out of scope for v1.)
-
 ## Why not store events in Absurd's tables?
 
 Absurd's task state is tied to a single task instance. If a task retries, its checkpoints carry over, but the task_id changes if you spawn a new task for a chained brain. A user-observable conversation needs to span tasks — the `user_message` the browser POSTed is part of the same conversation as the `assistant_message` three brains later, even though each brain is a distinct Absurd task.
