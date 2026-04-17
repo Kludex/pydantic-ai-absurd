@@ -4,6 +4,11 @@ CREATE TABLE IF NOT EXISTS agent_sessions.sessions (
     id UUID PRIMARY KEY,
     status TEXT NOT NULL DEFAULT 'active',
     metadata JSONB NOT NULL DEFAULT '{}',
+    -- Lease column for single-active-brain enforcement when concurrency='queue'.
+    -- Holds the Absurd task_id of the running brain, or NULL when no brain is
+    -- active. A row-level CAS on this column replaces the advisory-lock pattern
+    -- so contended brains never pin a pool connection.
+    running_task_id TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );

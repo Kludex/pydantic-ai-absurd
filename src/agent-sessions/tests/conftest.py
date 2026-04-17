@@ -81,4 +81,5 @@ async def absurd(db_dsn: str) -> AsyncIterator[AsyncAbsurd]:
 
 @pytest.fixture
 def workflow(pool: AsyncPool, absurd: AsyncAbsurd) -> Workflow:
-    return Workflow(absurd=absurd, pool=pool)
+    # Short lease poll for tests; production defaults to 1.0s.
+    return Workflow(absurd=absurd, pool=pool, session_lease_poll_seconds=0.05)

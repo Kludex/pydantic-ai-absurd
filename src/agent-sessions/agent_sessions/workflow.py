@@ -205,11 +205,13 @@ class Workflow:
         pool: AsyncPool,
         max_wake_depth: int = 20,
         on_poison: PoisonHandler | None = None,
+        session_lease_poll_seconds: float = 1.0,
     ) -> None:
         self._absurd = absurd
         self._pool = pool
         self._max_wake_depth = max_wake_depth
         self._on_poison = on_poison
+        self._session_lease_poll_seconds = session_lease_poll_seconds
         self._brains: dict[str, BrainDefinition] = {}
 
     @property
@@ -301,6 +303,9 @@ async def _run_brain(
     params: Mapping[str, JsonValue],
     ctx: AsyncTaskContext,
 ) -> JsonValue:
+    import sys
+
+    print(f'[_run_brain] entered task={ctx.task_id} params={params}', file=sys.stderr)
     session_id = _expect_uuid(params, 'session_id')
     raw_input = params.get('input') or {}
     if not isinstance(raw_input, dict):
@@ -313,22 +318,26 @@ async def _run_brain(
     session = await Session.load(workflow.pool, session_id)
     await _check_wake_depth(workflow.pool, session_id, causation_id, workflow._max_wake_depth)
 
-    # Single-active-brain enforcement when concurrency == 'queue': take a
-    # session-level advisory lock for the duration of the brain body.
+    # Single-active-brain enforcement when concurrency == 'queue': use a row-level
+    # lease on `agent_sessions.sessions.running_task_id`. Postgres advisory locks
+    # would be simpler but they're bound to the connection that acquired them, so
+    # holding one for the brain's lifetime pins a pool connection - under concurrent
+    # sessions that starves the pool and deadlocks against `session.append()` on
+    # the conn the brain is itself trying to use. The lease pattern only touches
+    # the pool for the brief CAS queries and never holds a conn between them.
     if concurrency == 'queue':
-        async with workflow.pool.connection() as conn:
-            await conn.execute('SELECT pg_advisory_lock(hashtextextended(%s, 1))', (str(session_id),))
-            try:
-                await _execute_brain_body(
-                    workflow=workflow,
-                    definition=definition,
-                    ctx=ctx,
-                    session=session,
-                    input_payload=raw_input,
-                    causation_id=causation_id,
-                )
-            finally:
-                await conn.execute('SELECT pg_advisory_unlock(hashtextextended(%s, 1))', (str(session_id),))
+        await _acquire_session_lease(workflow.pool, session_id, ctx, workflow._session_lease_poll_seconds)
+        try:
+            await _execute_brain_body(
+                workflow=workflow,
+                definition=definition,
+                ctx=ctx,
+                session=session,
+                input_payload=raw_input,
+                causation_id=causation_id,
+            )
+        finally:
+            await _release_session_lease(workflow.pool, session_id, ctx.task_id)
     else:
         await _execute_brain_body(
             workflow=workflow,
@@ -339,6 +348,57 @@ async def _run_brain(
             causation_id=causation_id,
         )
     return None
+
+
+_LEASE_POLL_STEP = 'agent_sessions:session_lease_poll'
+
+
+async def _acquire_session_lease(
+    pool: AsyncPool,
+    session_id: UUID,
+    ctx: AsyncTaskContext,
+    poll_seconds: float,
+) -> None:
+    """Acquire the per-session lease, suspending via Absurd when another brain holds it.
+
+    Each poll is a single, briefly-held pool connection. Between polls the Absurd task
+    sleeps durably via `ctx.sleep_for(...)`, so a contended session doesn't keep a pool
+    connection pinned and doesn't count against the worker's concurrency budget.
+    """
+    # ctx.task_id is typed str in the SDK but arrives as a uuid.UUID at runtime.
+    # Stringify at the bind site so the TEXT column comparison doesn't trigger
+    # an `operator does not exist: text = uuid` error.
+    task_id_text = str(ctx.task_id)
+    while True:
+        async with pool.connection() as conn:
+            cur = await conn.execute(
+                """
+                UPDATE agent_sessions.sessions
+                SET running_task_id = %s
+                WHERE id = %s AND (running_task_id IS NULL OR running_task_id = %s)
+                RETURNING 1
+                """,
+                (task_id_text, session_id, task_id_text),
+            )
+            acquired = await cur.fetchone() is not None
+        if acquired:
+            return
+        await ctx.sleep_for(_LEASE_POLL_STEP, poll_seconds)
+
+
+async def _release_session_lease(pool: AsyncPool, session_id: UUID, task_id: str) -> None:
+    """Release the lease. `WHERE running_task_id = task_id` prevents us from clearing a
+    lease that's been force-taken by another task after a poison-cleanup."""
+    task_id_text = str(task_id)
+    async with pool.connection() as conn:
+        await conn.execute(
+            """
+            UPDATE agent_sessions.sessions
+            SET running_task_id = NULL
+            WHERE id = %s AND running_task_id = %s
+            """,
+            (session_id, task_id_text),
+        )
 
 
 async def _execute_brain_body(

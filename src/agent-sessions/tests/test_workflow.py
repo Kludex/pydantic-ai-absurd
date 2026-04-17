@@ -270,6 +270,54 @@ async def test_wake_by_session_id_only(workflow: Workflow) -> None:
     assert handle.task_id
 
 
+async def test_second_brain_on_same_session_waits_for_lease(workflow: Workflow) -> None:
+    """Two brains woken on the same session must serialize via the lease.
+
+    Drives the `sleep_for` polling branch in `_acquire_session_lease`: the second
+    brain's first CAS fails (lease held by brain one), it suspends, then retries
+    after the poll interval and succeeds once brain one releases.
+
+    We prime the lease by manually setting `running_task_id` to a fake id before
+    any task runs, so the first `_acquire_session_lease` CAS is guaranteed to
+    miss and the poll path is deterministic. After a short delay the conftest
+    poll interval elapses; we free the lease and drain.
+    """
+    order: list[str] = []
+
+    @workflow.brain('only')
+    async def only(ctx: BrainContext[None]) -> None:
+        order.append('ran')
+
+    session = await Session.create(workflow.pool)
+    # Pre-occupy the lease so the brain's first CAS miss and triggers the poll path.
+    async with workflow.pool.connection() as conn:
+        await conn.execute(
+            'UPDATE agent_sessions.sessions SET running_task_id = %s WHERE id = %s',
+            ('sentinel', session.id),
+        )
+
+    await workflow.wake(session, 'only')
+
+    # First drain: brain hits the contended lease, suspends on sleep_for.
+    await workflow.absurd.work_batch(batch_size=1)
+    assert order == []
+
+    # Free the lease; subsequent poll attempts will succeed once they re-fire.
+    async with workflow.pool.connection() as conn:
+        await conn.execute(
+            'UPDATE agent_sessions.sessions SET running_task_id = NULL WHERE id = %s',
+            (session.id,),
+        )
+
+    # Wait past the poll interval, then drain again.
+    await anyio.sleep(0.15)
+    for _ in range(5):
+        await workflow.absurd.work_batch(batch_size=1)
+        await anyio.sleep(0.05)
+
+    assert order == ['ran']
+
+
 async def test_wake_depth_check_raises_for_long_chain(pool: AsyncPool) -> None:
     from agent_sessions.workflow import WakeDepthExceeded, _check_wake_depth
 

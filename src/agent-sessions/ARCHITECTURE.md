@@ -24,6 +24,7 @@ erDiagram
         uuid id PK
         text status "'active' | 'archived' | 'cancelled'"
         jsonb metadata "app-level tags"
+        text running_task_id "Absurd task_id of active brain, or NULL - session-level lease for concurrency='queue'"
         timestamptz created_at
         timestamptz updated_at
     }
@@ -152,7 +153,9 @@ Brains that must be idempotent on the session log should wrap non-idempotent app
 
 ## Concurrency inside a session
 
-By default, `workflow.wake(session, name)` enqueues with `concurrency="queue"` — the brain handler takes a **session-level advisory lock** (`pg_advisory_lock(hashtextextended(session_id, 1))`) before running its body. If another brain on the same session is already running, the new one blocks on the lock until the first finishes.
+By default, `workflow.wake(session, name)` enqueues with `concurrency="queue"` — the brain handler takes a **row-level lease** on `agent_sessions.sessions.running_task_id` via a CAS update (`UPDATE ... SET running_task_id = ? WHERE id = ? AND running_task_id IS NULL`). If another brain on the same session holds the lease, the new one calls `ctx.sleep_for(...)` (Absurd's durable sleep), returning its pool connection and its worker slot, and retries after the configured `session_lease_poll_seconds` (default 1s).
+
+This is intentionally a lease, not a Postgres advisory lock. Advisory locks are bound to the connection that acquired them, so holding one for the brain's lifetime would pin a pool connection — and under concurrent sessions that starves the pool, blocking `session.append()` on the brain's own other queries. The lease touches the pool only for the brief CAS queries; between polls the task is suspended, not holding anything.
 
 This is session-scoped, not brain-scoped. Two different sessions run fully in parallel. `concurrency="parallel"` skips the lock — useful for read-only brains or ones that write to their own scoped subtree.
 
