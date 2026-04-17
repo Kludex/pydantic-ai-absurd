@@ -80,7 +80,6 @@ class Session:
         visibility: Visibility = Visibility.public,
         payload_version: int = 1,
         causation_id: int | None = None,
-        supersedes: int | None = None,
     ) -> SessionEvent:
         """Append an event. Serialized per-session via an advisory lock."""
         async with self._pool.connection() as conn:
@@ -105,8 +104,8 @@ class Session:
                     """
                     INSERT INTO agent_sessions.session_events
                         (session_id, sequence, kind, actor, visibility, payload_version,
-                         payload, causation_id, supersedes)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                         payload, causation_id)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                     RETURNING created_at
                     """,
                     (
@@ -118,7 +117,6 @@ class Session:
                         payload_version,
                         Jsonb(payload),
                         causation_id,
-                        supersedes,
                     ),
                 )
                 created = await cur.fetchone()
@@ -145,7 +143,6 @@ class Session:
             payload_version=payload_version,
             payload=payload,
             causation_id=causation_id,
-            supersedes=supersedes,
             created_at=created_at,
         )
 
@@ -158,7 +155,7 @@ class Session:
     ) -> list[SessionEvent]:
         query = [
             'SELECT session_id, sequence, kind, actor, visibility, payload_version,',
-            '       payload, causation_id, supersedes, created_at',
+            '       payload, causation_id, created_at',
             'FROM agent_sessions.session_events',
             'WHERE session_id = %s AND sequence > %s',
         ]
@@ -283,7 +280,7 @@ async def _listen_iterator(
                 await cur.execute(
                     """
                     SELECT session_id, sequence, kind, actor, visibility, payload_version,
-                           payload, causation_id, supersedes, created_at
+                           payload, causation_id, created_at
                     FROM agent_sessions.session_events
                     WHERE session_id = %s AND sequence = %s
                     """,

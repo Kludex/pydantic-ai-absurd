@@ -49,7 +49,6 @@ class SessionEvent(BaseModel):
     payload_version: int = 1
     payload: dict[str, Any] = Field(default_factory=dict)
     causation_id: int | None = None
-    supersedes: int | None = None
     created_at: datetime
 
 

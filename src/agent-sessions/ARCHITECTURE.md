@@ -18,7 +18,6 @@ erDiagram
     sessions ||--o{ session_events : "has"
     sessions ||--o{ session_snapshots : "compacts to"
     session_events }o..|| session_events : "causation_id"
-    session_events }o..|| session_events : "supersedes"
 
     sessions {
         uuid id PK
@@ -38,7 +37,6 @@ erDiagram
         int payload_version "schema version for payload"
         jsonb payload "Pydantic AI ModelMessage or kind-specific shape"
         bigint causation_id "sequence of the event that caused this one"
-        bigint supersedes "sequence this event replaces (edits/regenerations)"
         timestamptz created_at
     }
 
@@ -88,10 +86,9 @@ All of that runs in a single transaction; commit makes the row and the notify vi
 - `session.messages()` — for an LLM. Skips the latest snapshot, converts events into `list[ModelMessage]` via `_pydantic_ai.py`. Events whose kind isn't a `ModelMessage` (e.g. `status_update`, lifecycle) are filtered out.
 - `session.listen(conninfo=...)` — real-time push. Two connections: a dedicated autocommit one for `LISTEN`, a pooled one for the row lookup on each notify. (Psycopg3's notify polling is stateful on its connection, so unrelated queries on that same connection break it — keep them separated.)
 
-**`causation_id` and `supersedes`:**
+**`causation_id`:**
 
-- `causation_id` — the `sequence` of the event that caused this one. When a brain appends via `BrainContext`, every append carries the `brain_started` event's sequence as its causation. When a brain wakes another brain, the new `brain_started` carries the previous brain's `brain_started.sequence`. Chaining these back gives you the full wake chain. `max_wake_depth` follows the chain on every wake and refuses to spawn beyond the configured depth.
-- `supersedes` — reserved for edit/regenerate flows (e.g. a user re-asks the same question, the new `user_message` supersedes the previous one). Not written anywhere by this package yet; here because changing the schema later is harder than putting the column in from day one.
+The `sequence` of the event that caused this one. When a brain appends via `BrainContext`, every append carries the `brain_started` event's sequence as its causation. When a brain wakes another brain, the new `brain_started` carries the previous brain's `brain_started.sequence`. Chaining these back gives you the full wake chain. `max_wake_depth` follows the chain on every wake and refuses to spawn beyond the configured depth.
 
 ### `session_snapshots`
 

@@ -35,7 +35,6 @@ CREATE TABLE IF NOT EXISTS agent_sessions.session_events (
     payload_version INT NOT NULL DEFAULT 1,
     payload JSONB NOT NULL,
     causation_id BIGINT,
-    supersedes BIGINT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     PRIMARY KEY (session_id, sequence)
 );
@@ -59,4 +58,4 @@ CREATE TABLE IF NOT EXISTS agent_sessions.session_snapshots (
 CREATE OR REPLACE FUNCTION agent_sessions.get_schema_version()
     RETURNS TEXT
     LANGUAGE SQL IMMUTABLE
-    AS $$ SELECT '0.0.2' $$;
+    AS $$ SELECT '0.0.1' $$;
