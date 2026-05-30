@@ -124,6 +124,10 @@ You want pydantic-ai-absurd when a *single run* is long enough, expensive enough
 
     Two processes, scaling workers, multi-turn conversations, and the gotchas.
 
+-   :material-life-buoy: __[Troubleshooting](troubleshooting.md)__
+
+    The setup errors you'll hit on the first run, and exactly how to fix each one.
+
 </div>
 
 ## Install

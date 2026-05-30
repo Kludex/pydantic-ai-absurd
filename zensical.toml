@@ -17,6 +17,7 @@ nav = [
   { "How durability works" = "durability.md" },
   { "Tools & MCP servers" = "mcp.md" },
   { "Running in production" = "deployment.md" },
+  { "Troubleshooting" = "troubleshooting.md" },
 ]
 
 [project.theme]

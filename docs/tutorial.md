@@ -17,7 +17,13 @@ We'll build it up one piece at a time. Each step adds exactly one new idea, show
 - A Pydantic AI `Agent`, so an LLM provider key (we'll use `openai:gpt-5.2`).
 - `pip install pydantic-ai-absurd`.
 
-The first time you use Absurd it needs its schema installed and a queue created. You do this **once**: the schema install is a migration step that ships with `absurd-sdk` (run it on deploy, like any other database migration), and the queue is created with `await absurd.create_queue()`, which you'll see in the full script in Step 4.
+The first time you use Absurd it needs its schema installed and a queue created. You do this **once**. The schema is a SQL install you run against your database, the way you'd run any migration:
+
+```bash
+psql "postgresql://localhost/absurd" -f tests/fixtures/absurd.sql
+```
+
+The queue is created in code with `await absurd.create_queue()`, which you'll see in the full script in Step 4. If your first run greets you with `schema "absurd" does not exist` or `database "..." does not exist`, the [Troubleshooting](troubleshooting.md) page has the fix.
 
 ## Step 1: Wrap your agent
 
