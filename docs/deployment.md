@@ -4,7 +4,7 @@ icon: lucide/server
 
 # Running in production
 
-You've got a durable run working on your laptop. Now you want to ship it - to a web app that spawns work and a fleet of workers that does it. This page covers how the pieces split across processes, how to scale them, how to carry a conversation across runs, and the handful of gotchas that are much nicer to read about here than to discover at 3 a.m.
+You've got a durable run working on your laptop. Now you want to ship it, to a web app that spawns work and a fleet of workers that does it. This page covers how the pieces split across processes, how to scale them, how to carry a conversation across runs, and the handful of gotchas that are much nicer to read about here than to discover at 3 a.m.
 
 ## Two processes, one database
 
@@ -13,7 +13,7 @@ The single most important idea for production is that **`spawn` and `start_worke
 - Your **web app** (or cron job, or queue consumer) calls `spawn`. It just writes a row to Postgres and returns. It stays small, fast, and stateless.
 - Your **workers** call `start_worker`. They claim rows and run the agent. They're where the CPU, memory, and time go.
 
-They never talk to each other directly - only through Postgres. Which means you can deploy them as separate containers and scale them independently.
+They never talk to each other directly, only through Postgres. Which means you can deploy them as separate containers and scale them independently.
 
 ```mermaid
 flowchart LR
@@ -52,11 +52,11 @@ flowchart LR
     ```
 
 !!! warning "Register tasks where they run"
-    Tasks must be registered in the **worker** process - the one calling `start_worker()` - before the worker starts. The web process spawns by task *name* (`"analyse"`); it doesn't need the agent or the `@register_task` decorator at all. If a worker claims a task it hasn't registered, it fails it as unknown.
+    Tasks must be registered in the **worker** process, the one calling `start_worker()`, before the worker starts. The web process spawns by task *name* (`"analyse"`); it doesn't need the agent or the `@register_task` decorator at all. If a worker claims a task it hasn't registered, it fails it as unknown.
 
 ## Scaling workers
 
-Because workers are just processes that poll the same Postgres queue, scaling is "run more of them." Two workers, ten workers, across machines - they coordinate through the database, each claiming different tasks. No leader, no coordinator, nothing extra to run.
+Because workers are just processes that poll the same Postgres queue, scaling is "run more of them." Two workers, ten workers, across machines, they coordinate through the database, each claiming different tasks. No leader, no coordinator, nothing extra to run.
 
 When demand drops, scale them back down. Spawned tasks wait safely in Postgres until a worker is free, so a worker being temporarily gone never loses work.
 
@@ -85,11 +85,11 @@ async def chat(params, ctx):
 Your app stores `all_messages` between turns (in your own table, a cache, wherever), and passes them as `message_history` when it spawns the next turn. The run itself stays durable; the *conversation* is just data you carry forward.
 
 !!! tip "pydantic-ai-absurd makes a run durable, not a conversation"
-    Keeping the transcript is your application's job - and it's a small one. The library's promise is narrower and stronger: any single run, however long, resumes after a crash.
+    Keeping the transcript is your application's job, and it's a small one. The library's promise is narrower and stronger: any single run, however long, resumes after a crash.
 
 ## Tuning the steps
 
-If you want to control how Absurd treats the checkpoints a wrapped agent creates - retry budget, heartbeat - pass a `StepConfig`:
+If you want to control how Absurd treats the checkpoints a wrapped agent creates, retry budget, heartbeat, pass a `StepConfig`:
 
 ```python
 from pydantic_ai_absurd import AbsurdAgent, StepConfig
@@ -102,7 +102,7 @@ agent = AbsurdAgent(
 )
 ```
 
-Both are optional. The defaults are sensible - reach for these only when you have a specific reason.
+Both are optional. The defaults are sensible, reach for these only when you have a specific reason.
 
 ## Gotchas
 
@@ -117,7 +117,7 @@ A few things `AbsurdAgent` deliberately refuses to do, each with a clear error s
     #            set `model` at agent construction.
     ```
 
-    Pick the model when you build the `AbsurdAgent`. (And the inner agent needs a model set at construction too - durability has nothing to infer from otherwise.)
+    Pick the model when you build the `AbsurdAgent`. (And the inner agent needs a model set at construction too, durability has nothing to infer from otherwise.)
 
 !!! danger "No `run_sync` inside a task"
     Absurd tasks are async. `run_sync` would block the worker's event loop, so it's disabled:
@@ -131,7 +131,7 @@ A few things `AbsurdAgent` deliberately refuses to do, each with a clear error s
     Always `await agent.run(...)`.
 
 !!! danger "Streaming doesn't mix with a durable task"
-    `run_stream` and `run_stream_events` stream tokens to a caller in real time - which has no meaning inside a task whose whole point is to run unattended and be replayable. They're refused inside a task:
+    `run_stream` and `run_stream_events` stream tokens to a caller in real time, which has no meaning inside a task whose whole point is to run unattended and be replayable. They're refused inside a task:
 
     ```python
     # inside a task:
@@ -145,7 +145,7 @@ A few things `AbsurdAgent` deliberately refuses to do, each with a clear error s
 
 That's production. To recap the shape:
 
-- [x] Web process spawns; worker process runs - split across containers
+- [x] Web process spawns; worker process runs, split across containers
 - [x] Register tasks in the worker
 - [x] Scale by running more workers; tasks wait safely in Postgres
 - [x] Carry conversations by threading `message_history` through your params
