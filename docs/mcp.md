@@ -6,11 +6,11 @@ icon: lucide/wrench
 
 Most useful agents call tools. So the natural question is: when my durable agent uses a tool, *is the tool call durable too?*
 
-The answer depends on what kind of tool it is, and pydantic-ai-absurd draws a deliberate line between two cases. Let's look at both.
+Yes. Both kinds of tool, your own function tools and MCP servers, are checkpointed by default.
 
-## Plain function tools pass through
+## Function tools are checkpointed
 
-If your agent has ordinary Python function tools, pydantic-ai-absurd leaves them completely alone.
+If your agent has ordinary Python function tools, pydantic-ai-absurd wraps them so each call is a checkpoint.
 
 ```python
 from pydantic_ai import Agent
@@ -19,24 +19,25 @@ from pydantic_ai_absurd import AbsurdAgent
 inner = Agent("openai:gpt-5.2", name="helper")
 
 @inner.tool_plain
-def add(a: int, b: int) -> int:
-    return a + b
+def charge(customer_id: str, cents: int) -> str:
+    return billing.charge(customer_id, cents)  # a real side effect
 
-agent = AbsurdAgent(inner, absurd)  # `add` is untouched
+agent = AbsurdAgent(inner, absurd)  # `charge` is now checkpointed
 ```
 
-The `add` tool is **not** wrapped in a checkpoint. When a task replays, `add` runs again like any other plain Python.
+When the model calls `charge`, the result is recorded in Postgres. If the worker crashes after the charge but before the run finishes, the replay does **not** call `charge` again, it returns the stored result. The customer is charged once.
 
-Why? Because that's the right default for function tools. They're expected to be **cheap and idempotent**, a calculation, a lookup, a pure transformation. Re-running `add(2, 3)` after a crash costs nothing and changes nothing. Wrapping it in a checkpoint would add Postgres round-trips for no benefit.
+This is the same guarantee model and MCP calls get, and it's why durable-by-default is the right behavior: the case that bites you is the tool with a side effect, and that's exactly the one you'd forget to protect.
 
-!!! warning "If a function tool has a real side effect"
-    A function tool that charges a credit card, sends an email, or writes a row is *not* idempotent, and it's not checkpointed, so a replay would do it twice. For those, do the side effect through `ctx.step(...)` inside your task (see [How durability works](durability.md#making-your-own-steps)), or make the operation idempotent on your end.
+!!! note "The return value must be JSON-serializable"
+    A checkpointed tool's return value is stored in Postgres, so it has to be JSON-serializable (the same constraint a task's return value has). Return plain data, not live objects like an open connection.
 
-## MCP servers get wrapped
+!!! tip "Truly pure tools just pay a tiny write"
+    A pure tool like `add(2, 3)` is checkpointed too, which costs one small Postgres write per call. That's almost always worth it for the once-only guarantee on the tools that *do* matter. If a hot, pure tool ever shows up in a profile, that's the moment to reach for a tuned `StepConfig`, not before.
 
-[MCP](https://modelcontextprotocol.io) servers are a different story. A call to an MCP server is a network round-trip to an external process, it's exactly as expensive and external as a model call. So pydantic-ai-absurd **does** checkpoint those.
+## MCP servers are checkpointed too
 
-When you give your agent an `MCPToolset`, the wrapping happens automatically:
+A call to an [MCP](https://modelcontextprotocol.io) server is a network round-trip to an external process, so checkpointing it matters even more: a replay shouldn't hit the server twice. When you give your agent an `MCPToolset`, the wrapping happens automatically:
 
 ```python
 from pydantic_ai import Agent
@@ -84,9 +85,9 @@ This follows the wrapped toolset's `cache_tools` setting:
 
 You can hold the whole thing in one sentence:
 
-> **MCP calls are durable; plain function tools are not, because MCP calls are expensive and external, and function tools are meant to be cheap and idempotent.**
+> **Anything the agent calls during a run, the model, MCP servers, and your function tools, is checkpointed, so a crash resumes from the last completed call and every side effect runs once.**
 
-If a function tool *isn't* cheap and idempotent, that's your signal to either make it idempotent or move its side effect into an explicit `ctx.step`.
+The only thing that *isn't* automatically checkpointed is the plain Python you write in the task body around `agent.run()`. If that has a side effect that must run once, wrap it in `ctx.step` yourself (see [How durability works](durability.md#making-your-own-steps)).
 
 ## What gets checkpointed, at a glance
 
@@ -95,7 +96,7 @@ If a function tool *isn't* cheap and idempotent, that's your signal to either ma
 | Model request | :material-check: Yes | Expensive, external, non-deterministic |
 | MCP tool call | :material-check: Yes | Network round-trip to another process |
 | MCP tool listing & instructions | :material-check: Yes | Avoids re-querying the server on replay |
-| Plain function tool | :material-close: No | Expected to be cheap and idempotent |
+| Function tool call | :material-check: Yes | So tools with side effects run exactly once |
 | Your own task code | :material-close: No | Wrap it in `ctx.step` if it must run once |
 
 Next up: taking this to production, the **[two-process split, scaling, and the gotchas](deployment.md)**.
