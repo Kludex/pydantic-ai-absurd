@@ -2,4 +2,4 @@
 
 set -x
 
-uv sync --all-packages --frozen
+uv sync --frozen

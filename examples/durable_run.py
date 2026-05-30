@@ -21,14 +21,7 @@ from pydantic_ai import Agent
 from pydantic_ai_absurd import AbsurdAgent
 from testcontainers.postgres import PostgresContainer
 
-ABSURD_SQL = (
-    Path(__file__).resolve().parent.parent
-    / "src"
-    / "pydantic-ai-absurd"
-    / "tests"
-    / "fixtures"
-    / "absurd.sql"
-).read_text()
+ABSURD_SQL = (Path(__file__).resolve().parent.parent / "tests" / "fixtures" / "absurd.sql").read_text()
 
 
 def _normalize_dsn(url: str) -> str:

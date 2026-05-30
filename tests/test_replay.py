@@ -42,7 +42,7 @@ async def test_checkpointed_response_survives_crash_and_is_not_reissued(absurd: 
     async def noop(params: JsonValue, ctx: AsyncTaskContext) -> JsonValue:  # pragma: no cover
         return None
 
-    absurd.register_task(name='crash')(noop)  # type: ignore[arg-type]
+    absurd.register_task(name='crash')(noop)
 
     # First attempt: record the checkpoint, then let the context manager exit (we
     # then explicitly fail the run so Absurd schedules a retry).

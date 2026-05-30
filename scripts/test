@@ -6,7 +6,7 @@ if [ -z "$GITHUB_ACTIONS" ]; then
     scripts/check
 fi
 
-(cd src/pydantic-ai-absurd && uv run coverage run -m pytest "$@")
+uv run coverage run -m pytest "$@"
 
 if [ -z "$GITHUB_ACTIONS" ]; then
     scripts/coverage

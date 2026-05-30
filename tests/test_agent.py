@@ -8,15 +8,14 @@ from fastmcp import FastMCP
 from pydantic import TypeAdapter
 from pydantic_ai import Agent, ModelMessage, ModelResponse
 from pydantic_ai.exceptions import UserError
-from pydantic_ai.mcp import MCPServerStdio
+from pydantic_ai.mcp import MCPToolset
 from pydantic_ai.messages import AgentStreamEvent, ModelRequest, TextPart, UserPromptPart
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 from pydantic_ai.tools import RunContext
 from pydantic_ai.toolsets import FunctionToolset
-from pydantic_ai.toolsets.fastmcp import FastMCPToolset
 from pydantic_core import to_jsonable_python
 
-from pydantic_ai_absurd import AbsurdAgent, AbsurdFastMCPToolset, AbsurdMCPServer, AbsurdModel
+from pydantic_ai_absurd import AbsurdAgent, AbsurdMCPToolset, AbsurdModel
 
 from .conftest import running_task_context
 
@@ -57,29 +56,20 @@ async def test_function_toolsets_are_not_wrapped(absurd: AsyncAbsurd) -> None:
     inner = Agent(_make_model(), toolsets=[toolset], name='a')
     agent = AbsurdAgent(inner, absurd, name='a')
     # Plain function toolsets pass through unchanged.
-    assert list(agent.toolsets)[0].__class__.__name__ != 'AbsurdMCPServer'
+    assert list(agent.toolsets)[0].__class__.__name__ != 'AbsurdMCPToolset'
 
 
-async def test_fastmcp_toolsets_are_wrapped(absurd: AsyncAbsurd) -> None:
+async def test_in_process_mcp_toolsets_are_wrapped(absurd: AsyncAbsurd) -> None:
     server: FastMCP[None] = FastMCP(name='calc')
 
     @server.tool
     def add(a: int, b: int) -> int:  # pragma: no cover - never invoked, only wrap check
         return a + b
 
-    toolset = FastMCPToolset[None](server)
+    toolset = MCPToolset[None](server)
     inner = Agent(_make_model(), toolsets=[toolset], name='a')
     agent = AbsurdAgent(inner, absurd, name='a')
-    assert any(isinstance(t, AbsurdFastMCPToolset) for t in agent.toolsets)
-
-
-async def test_mcp_stdio_toolsets_are_wrapped(absurd: AsyncAbsurd) -> None:
-    # Construct a stdio MCP server (no subprocess spawned until used) to cover the
-    # MCPServer isinstance branch in _absurdify_toolset.
-    mcp_server = MCPServerStdio(command='true', args=[])
-    inner = Agent(_make_model(), toolsets=[mcp_server], name='a')
-    agent = AbsurdAgent(inner, absurd, name='a')
-    assert any(isinstance(t, AbsurdMCPServer) for t in agent.toolsets)
+    assert any(isinstance(t, AbsurdMCPToolset) for t in agent.toolsets)
 
 
 async def test_iter_rejects_non_absurd_model(absurd: AsyncAbsurd) -> None:
@@ -104,7 +94,7 @@ async def test_run_inside_task_context_completes(absurd: AsyncAbsurd) -> None:
     async def noop(params: JsonValue, ctx: AsyncTaskContext) -> JsonValue:  # pragma: no cover
         return None
 
-    absurd.register_task(name='noop')(noop)  # type: ignore[arg-type]
+    absurd.register_task(name='noop')(noop)
 
     async with running_task_context(absurd, 'noop'):
         result = await agent.run('hi')
@@ -132,7 +122,7 @@ async def test_run_stream_inside_task_raises(absurd: AsyncAbsurd) -> None:
     async def noop(params: JsonValue, ctx: AsyncTaskContext) -> JsonValue:  # pragma: no cover
         return None
 
-    absurd.register_task(name='noop')(noop)  # type: ignore[arg-type]
+    absurd.register_task(name='noop')(noop)
 
     async with running_task_context(absurd, 'noop'):
         with pytest.raises(UserError, match='run_stream'):
@@ -154,7 +144,7 @@ async def test_iter_inside_task_works(absurd: AsyncAbsurd) -> None:
     async def noop(params: JsonValue, ctx: AsyncTaskContext) -> JsonValue:  # pragma: no cover
         return None
 
-    absurd.register_task(name='noop')(noop)  # type: ignore[arg-type]
+    absurd.register_task(name='noop')(noop)
 
     async with running_task_context(absurd, 'noop'):
         async with agent.iter('hi') as run:
@@ -207,7 +197,7 @@ async def test_run_inside_authored_task_is_durable(absurd: AsyncAbsurd) -> None:
         result = await agent.run('continue', message_history=history)
         return {'output': result.output}
 
-    absurd.register_task(name='analyse')(analyse)  # type: ignore[arg-type]
+    absurd.register_task(name='analyse')(analyse)
 
     history = [
         ModelRequest(parts=[UserPromptPart(content='earlier turn')]),
@@ -234,7 +224,7 @@ async def test_run_without_model_on_wrapped_agent_raises(absurd: AsyncAbsurd) ->
 async def test_event_stream_handler_override(absurd: AsyncAbsurd) -> None:
     inner = Agent(_make_model(), name='a')
 
-    async def handler(run_ctx: RunContext[None], stream: AsyncIterable[AgentStreamEvent]) -> None:  # pragma: no cover
+    async def handler(run_ctx: RunContext[object], stream: AsyncIterable[AgentStreamEvent]) -> None:  # pragma: no cover
         return None
 
     agent = AbsurdAgent(inner, absurd, name='a', event_stream_handler=handler)

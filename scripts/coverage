@@ -2,4 +2,4 @@
 
 set -x
 
-(cd src/pydantic-ai-absurd && uv run coverage report --show-missing --skip-covered --fail-under=100)
+uv run coverage report --show-missing --skip-covered --fail-under=100
