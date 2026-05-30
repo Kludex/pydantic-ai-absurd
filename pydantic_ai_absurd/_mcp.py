@@ -1,16 +1,14 @@
 from __future__ import annotations
 
-from abc import ABC, abstractmethod
 from collections.abc import Awaitable, Callable, Sequence
 from typing import Any, TypeVar
 
 from absurd_sdk import JsonValue
 from pydantic import TypeAdapter
-from pydantic_ai import AbstractToolset, ToolsetTool, WrapperToolset
-from pydantic_ai.mcp import MCPServer
+from pydantic_ai import ToolsetTool, WrapperToolset
+from pydantic_ai.mcp import MCPToolset
 from pydantic_ai.messages import InstructionPart
 from pydantic_ai.tools import AgentDepsT, RunContext, ToolDefinition
-from pydantic_ai.toolsets.fastmcp import FastMCPToolset
 from typing_extensions import Self
 
 from ._utils import StepConfig, current_async_context
@@ -42,17 +40,19 @@ def _deserialize_instructions(payload: JsonValue) -> Instructions:
     return _instructions_adapter.validate_python(payload)
 
 
-class AbsurdMCPToolset(WrapperToolset[AgentDepsT], ABC):
-    """Base for MCP toolsets whose calls are checkpointed into Absurd steps.
+class AbsurdMCPToolset(WrapperToolset[AgentDepsT]):
+    """Durable wrapper around a Pydantic AI `MCPToolset`.
 
-    `call_tool` lives on the concrete subclass (`AbsurdMCPServer`, `AbsurdFastMCPToolset`)
-    so it can declare the actual return type of the wrapped toolset (`ToolResult` for
-    MCPServer). This base provides the step dispatch helpers only.
+    Every `get_tools`, `get_instructions`, and `call_tool` is checkpointed into an
+    Absurd step, so on replay the cached result is returned instead of re-hitting the
+    MCP server. Tool definitions are also cached across steps to avoid redundant
+    round-trips; the cache honors the wrapped toolset's `cache_tools` setting - set it
+    to `False` when a server emits `tools/list_changed` notifications mid-workflow.
     """
 
     def __init__(
         self,
-        wrapped: AbstractToolset[AgentDepsT],
+        wrapped: MCPToolset[AgentDepsT],
         *,
         step_name_prefix: str,
         step_config: StepConfig | None = None,
@@ -62,10 +62,15 @@ class AbsurdMCPToolset(WrapperToolset[AgentDepsT], ABC):
         self._step_name_prefix = step_name_prefix
         id_suffix = f'__{wrapped.id}' if wrapped.id else ''
         self._name = f'{step_name_prefix}__mcp_server{id_suffix}'
+        self._cached_tool_defs: dict[str, ToolDefinition] | None = None
 
-    @abstractmethod
+    @property
+    def _server(self) -> MCPToolset[AgentDepsT]:
+        assert isinstance(self.wrapped, MCPToolset)
+        return self.wrapped
+
     def tool_for_tool_def(self, tool_def: ToolDefinition) -> ToolsetTool[AgentDepsT]:
-        raise NotImplementedError
+        return self._server.tool_for_tool_def(tool_def)
 
     @property
     def id(self) -> str | None:
@@ -77,9 +82,7 @@ class AbsurdMCPToolset(WrapperToolset[AgentDepsT], ABC):
     async def __aexit__(self, *args: Any) -> bool | None:
         return None
 
-    def visit_and_replace(
-        self, visitor: Callable[[AbstractToolset[AgentDepsT]], AbstractToolset[AgentDepsT]]
-    ) -> AbstractToolset[AgentDepsT]:
+    def visit_and_replace(self, visitor: Callable[[Any], Any]) -> Any:
         return self
 
     async def _run_step(self, name_suffix: str, fn: Callable[[], Awaitable[R]]) -> R:
@@ -89,6 +92,9 @@ class AbsurdMCPToolset(WrapperToolset[AgentDepsT], ABC):
         return await task_ctx.step(f'{self._name}.{name_suffix}', fn)
 
     async def get_tools(self, ctx: RunContext[AgentDepsT]) -> dict[str, ToolsetTool[AgentDepsT]]:
+        if self._server.cache_tools and self._cached_tool_defs is not None:
+            return {name: self.tool_for_tool_def(td) for name, td in self._cached_tool_defs.items()}
+
         async def _inner() -> dict[str, JsonValue]:
             tools = await super(AbsurdMCPToolset, self).get_tools(ctx)
             return _serialize_tool_defs({name: tool.tool_def for name, tool in tools.items()})
@@ -98,11 +104,12 @@ class AbsurdMCPToolset(WrapperToolset[AgentDepsT], ABC):
 
         payload = await self._run_step('get_tools', _inner)
         tool_defs = _deserialize_tool_defs(payload)
-        return {name: self.tool_for_tool_def(tool_def) for name, tool_def in tool_defs.items()}
+        result = {name: self.tool_for_tool_def(tool_def) for name, tool_def in tool_defs.items()}
+        if self._server.cache_tools:
+            self._cached_tool_defs = tool_defs
+        return result
 
-    async def get_instructions(
-        self, ctx: RunContext[AgentDepsT]
-    ) -> str | InstructionPart | Sequence[str | InstructionPart] | None:
+    async def get_instructions(self, ctx: RunContext[AgentDepsT]) -> Instructions:
         result = await super().get_instructions(ctx)
         if result is not None:  # pragma: no cover - fast path when the wrapped server is already entered
             return result
@@ -110,9 +117,7 @@ class AbsurdMCPToolset(WrapperToolset[AgentDepsT], ABC):
         if current_async_context() is None:
             return None
 
-        if not isinstance(self.wrapped, (MCPServer, FastMCPToolset)):  # pragma: no cover - defensive
-            return None
-        if not self.wrapped.include_instructions:
+        if not self._server.include_instructions:
             return None
 
         async def _inner() -> JsonValue:
@@ -121,3 +126,15 @@ class AbsurdMCPToolset(WrapperToolset[AgentDepsT], ABC):
 
         payload = await self._run_step('get_instructions', _inner)
         return _deserialize_instructions(payload)
+
+    async def call_tool(
+        self,
+        name: str,
+        tool_args: dict[str, Any],
+        ctx: RunContext[AgentDepsT],
+        tool: ToolsetTool[AgentDepsT],
+    ) -> Any:
+        async def _inner() -> Any:
+            return await self._server.call_tool(name, tool_args, ctx, tool)
+
+        return await self._run_step('call_tool', _inner)

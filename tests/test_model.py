@@ -38,7 +38,7 @@ async def _noop_handler(params: JsonValue, ctx: AsyncTaskContext) -> JsonValue: 
 def _register_noop(absurd: AsyncAbsurd) -> None:
     # Absurd's register_task decorator is typed for sync handlers; the async runtime
     # overload isn't reflected in types. See _agent.py for the same workaround.
-    absurd.register_task(name='noop')(_noop_handler)  # type: ignore[arg-type]
+    absurd.register_task(name='noop')(_noop_handler)
 
 
 async def test_request_without_context_calls_model() -> None:
