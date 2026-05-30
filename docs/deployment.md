@@ -87,23 +87,6 @@ Your app stores `all_messages` between turns (in your own table, a cache, wherev
 !!! tip "pydantic-ai-absurd makes a run durable, not a conversation"
     Keeping the transcript is your application's job, and it's a small one. The library's promise is narrower and stronger: any single run, however long, resumes after a crash.
 
-## Tuning the steps
-
-If you want to control how Absurd treats the checkpoints a wrapped agent creates, retry budget, heartbeat, pass a `StepConfig`:
-
-```python
-from pydantic_ai_absurd import AbsurdAgent, StepConfig
-
-agent = AbsurdAgent(
-    Agent("openai:gpt-5.2", name="analyst"),
-    absurd,
-    model_step_config=StepConfig(max_attempts=3),       # applied to each model-request checkpoint
-    mcp_step_config=StepConfig(heartbeat_seconds=30),   # applied to each MCP-call checkpoint
-)
-```
-
-Both are optional. The defaults are sensible, reach for these only when you have a specific reason.
-
 ## Gotchas
 
 A few things `AbsurdAgent` deliberately refuses to do, each with a clear error so you're never left guessing.

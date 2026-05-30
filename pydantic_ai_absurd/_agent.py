@@ -35,7 +35,7 @@ from pydantic_ai.tools import AgentDepsT, AgentNativeTool, DeferredToolResults, 
 from ._function_toolset import AbsurdFunctionToolset
 from ._mcp import AbsurdMCPToolset
 from ._model import AbsurdModel
-from ._utils import StepConfig, current_async_context, require_async_context
+from ._utils import current_async_context, require_async_context
 
 if TYPE_CHECKING:
     from pydantic_ai.agent.spec import AgentSpec
@@ -73,8 +73,6 @@ class AbsurdAgent(WrapperAgent[AgentDepsT, OutputDataT]):
         *,
         name: str | None = None,
         event_stream_handler: EventStreamHandler[AgentDepsT] | None = None,
-        model_step_config: StepConfig | None = None,
-        mcp_step_config: StepConfig | None = None,
         parallel_execution_mode: ParallelExecutionMode = 'sequential',
     ) -> None:
         super().__init__(wrapped)
@@ -89,16 +87,12 @@ class AbsurdAgent(WrapperAgent[AgentDepsT, OutputDataT]):
                 'used as the prefix for every checkpoint step.'
             )
 
-        self._model_step_config: StepConfig = model_step_config or {}
-        self._mcp_step_config: StepConfig = mcp_step_config or {}
-
         if not isinstance(wrapped.model, Model):
             raise UserError('An agent needs a `model` set at construction time to be wrapped with AbsurdAgent.')
 
         self._model = AbsurdModel(
             wrapped.model,
             step_name_prefix=self._name,
-            step_config=self._model_step_config,
             event_stream_handler=self.event_stream_handler,
         )
 
@@ -111,13 +105,11 @@ class AbsurdAgent(WrapperAgent[AgentDepsT, OutputDataT]):
             return AbsurdMCPToolset(
                 wrapped=toolset,
                 step_name_prefix=self._step_prefix,
-                step_config=self._mcp_step_config,
             )
         if isinstance(toolset, FunctionToolset):
             return AbsurdFunctionToolset(
                 wrapped=toolset,
                 step_name_prefix=self._step_prefix,
-                step_config=self._mcp_step_config,
             )
         return toolset
 

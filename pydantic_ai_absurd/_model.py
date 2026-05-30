@@ -13,7 +13,7 @@ from pydantic_ai.models.wrapper import CompletedStreamedResponse, WrapperModel
 from pydantic_ai.settings import ModelSettings
 from pydantic_ai.tools import RunContext
 
-from ._utils import StepConfig, current_async_context
+from ._utils import current_async_context
 
 _response_adapter: TypeAdapter[ModelResponse] = TypeAdapter(ModelResponse)
 
@@ -45,12 +45,10 @@ class AbsurdModel(WrapperModel):
         model: Model,
         *,
         step_name_prefix: str,
-        step_config: StepConfig | None = None,
         event_stream_handler: EventStreamHandler[Any] | None = None,
     ) -> None:
         super().__init__(model)
         self._step_name_prefix = step_name_prefix
-        self._step_config: StepConfig = step_config or {}
         self.event_stream_handler = event_stream_handler
 
     @property
