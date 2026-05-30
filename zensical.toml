@@ -13,7 +13,7 @@ Copyright &copy; 2026 Marcelo Trylesinski
 
 nav = [
   { "Pydantic AI Absurd" = "index.md" },
-  { "Tutorial - User Guide" = "tutorial.md" },
+  { "Tutorial" = "tutorial.md" },
   { "How durability works" = "durability.md" },
   { "Tools & MCP servers" = "mcp.md" },
   { "Running in production" = "deployment.md" },
