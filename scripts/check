@@ -6,8 +6,3 @@ set -x
     uv run ruff format --check --diff pydantic_ai_absurd tests && \
     uv run ruff check pydantic_ai_absurd tests && \
     uv run mypy pydantic_ai_absurd tests)
-
-(cd src/agent-sessions && \
-    uv run ruff format --check --diff agent_sessions tests && \
-    uv run ruff check agent_sessions tests && \
-    uv run mypy agent_sessions tests)

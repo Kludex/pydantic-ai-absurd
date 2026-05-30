@@ -8,11 +8,12 @@ from fastmcp import FastMCP
 from pydantic_ai import Agent, ModelMessage, ModelResponse
 from pydantic_ai.exceptions import UserError
 from pydantic_ai.mcp import MCPServerStdio
-from pydantic_ai.messages import AgentStreamEvent, TextPart
+from pydantic_ai.messages import AgentStreamEvent, ModelRequest, TextPart, UserPromptPart
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 from pydantic_ai.tools import RunContext
 from pydantic_ai.toolsets import FunctionToolset
 from pydantic_ai.toolsets.fastmcp import FastMCPToolset
+from pydantic_core import to_jsonable_python
 
 from pydantic_ai_absurd import AbsurdAgent, AbsurdFastMCPToolset, AbsurdMCPServer, AbsurdModel
 
@@ -202,6 +203,34 @@ async def test_register_task_is_idempotent(absurd: AsyncAbsurd) -> None:
     agent = AbsurdAgent(inner, absurd, name='x', register_task=True)
     # Second call should be a no-op, not error.
     agent._register_task()
+
+
+async def test_register_task_threads_message_history(absurd: AsyncAbsurd) -> None:
+    seen: list[list[ModelMessage]] = []
+
+    def fn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        seen.append(list(messages))
+        return ModelResponse(parts=[TextPart(content='ok')])
+
+    inner = Agent(FunctionModel(fn, model_name='fn'), name='hist')
+    AbsurdAgent(inner, absurd, name='hist', register_task=True)
+
+    history = [
+        ModelRequest(parts=[UserPromptPart(content='earlier turn')]),
+        ModelResponse(parts=[TextPart(content='earlier reply')]),
+    ]
+    params: dict[str, JsonValue] = {
+        'prompt': 'continue',
+        'message_history': to_jsonable_python(history),
+    }
+    spawned = await absurd.spawn('hist.run', params)
+    await absurd.work_batch(batch_size=1)
+    result = await absurd.fetch_task_result(spawned['task_id'])
+    assert result is not None and result.state == 'completed'
+
+    # The run saw the prior conversation, not a blank history.
+    parts = [p for messages in seen for m in messages for p in m.parts]
+    assert any(isinstance(p, UserPromptPart) and p.content == 'earlier turn' for p in parts)
 
 
 async def test_run_without_model_on_wrapped_agent_raises(absurd: AsyncAbsurd) -> None:

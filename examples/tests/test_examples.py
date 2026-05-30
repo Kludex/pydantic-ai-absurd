@@ -5,13 +5,7 @@ import pytest
 pytestmark = pytest.mark.anyio
 
 
-async def test_readme_snippet_runs() -> None:
-    import readme_snippet
+async def test_durable_run_example() -> None:
+    import durable_run
 
-    await readme_snippet.main()
-
-
-async def test_vercel_starlette_runs() -> None:
-    import vercel_starlette
-
-    await vercel_starlette.main()
+    await durable_run.main()

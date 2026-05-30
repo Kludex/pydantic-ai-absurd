@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager, contextmanager
 from typing import TYPE_CHECKING, Any
 
 from absurd_sdk import AsyncAbsurd, AsyncTaskContext, JsonValue
+from pydantic import TypeAdapter
 from pydantic_ai import (
     AbstractToolset,
     AgentRunResultEvent,
@@ -47,15 +48,27 @@ from ._utils import StepConfig, current_async_context, require_async_context
 if TYPE_CHECKING:
     from pydantic_ai.agent.spec import AgentSpec
 
+_history_adapter: TypeAdapter[list[_messages.ModelMessage]] = TypeAdapter(list[_messages.ModelMessage])
+
 
 class AbsurdAgent(WrapperAgent[AgentDepsT, OutputDataT]):
-    """Wrap a Pydantic AI agent so every model call and tool call is checkpointed via Absurd.
+    """Wrap a Pydantic AI agent so the whole run is a durable Absurd workflow.
 
     The wrapped model is replaced with `AbsurdModel`; any `MCPServer` or `FastMCPToolset`
     toolsets are replaced with their Absurd counterparts. Plain function toolsets are
     left untouched - their Python side-effects are expected to be idempotent and cheap to
     re-run (the expensive, non-idempotent things live behind LLM calls and MCP calls,
     both of which are checkpointed).
+
+    With `register_task=True`, the entire `run()` is registered as an Absurd task named
+    `<name>.run`. Spawn it (`absurd.spawn('<name>.run', {'prompt': ..., 'message_history': [...]})`)
+    and the run executes durably: each model and MCP call is a checkpoint, so a crash
+    mid-run resumes from the last completed step instead of restarting. This is the
+    Postgres-only analogue of Pydantic AI's Temporal integration - the run is the workflow.
+
+    Leave `register_task=False` (the default) when the agent is a sub-component called by
+    other code (e.g. via `agent.run(...)` inside another task), so constructing it doesn't
+    register a top-level task nobody spawns.
     """
 
     _parallel_execution_mode: ParallelExecutionMode
@@ -137,7 +150,9 @@ class AbsurdAgent(WrapperAgent[AgentDepsT, OutputDataT]):
             params = params or {}
             raw_prompt = params.get('prompt')
             prompt: str | None = raw_prompt if isinstance(raw_prompt, str) else None
-            result = await agent.run(prompt)
+            raw_history = params.get('message_history')
+            history = _history_adapter.validate_python(raw_history) if isinstance(raw_history, list) else None
+            result = await agent.run(prompt, message_history=history)
             return {
                 'output': to_jsonable_python(result.output),
                 'all_messages': to_jsonable_python(result.all_messages()),
