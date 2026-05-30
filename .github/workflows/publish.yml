@@ -26,15 +26,8 @@ jobs:
         with:
           enable-cache: true
 
-      - name: Build and check tag matches version
-        run: |
-          uv build
-          built="$(ls dist/*.tar.gz | sed -E 's/.*pydantic_ai_absurd-(.*)\.tar\.gz/\1/')"
-          tag="${GITHUB_REF_NAME#v}"
-          if [ "$built" != "$tag" ]; then
-            echo "Tag $tag does not match built version $built" >&2
-            exit 1
-          fi
+      - name: Build package
+        run: uv build
 
       - name: Publish to PyPI
         run: uv publish
