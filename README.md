@@ -1,8 +1,18 @@
-# pydantic-ai-absurd
+# Pydantic AI Absurd
 
-Run a Pydantic AI agent durably on Postgres alone - no Redis, no broker, no daemon. Call `agent.run(...)` inside an [Absurd](https://github.com/earendil-works/absurd) task and every model call and MCP call is checkpointed; a worker crash mid-run resumes from the last completed step instead of restarting, without re-spending tokens.
+<p align="center"><em>Durable execution for Pydantic AI agents, on Postgres alone.</em></p>
 
-It's the Postgres-only analogue of Pydantic AI's Temporal integration: you author the task, and the agent is a durable callable inside it.
+---
+
+When you put an agent in production, something uncomfortable happens: it runs for a while.
+
+A real agent call isn't one HTTP request. It's a model call, then a tool call, then *another* model call, maybe an MCP server in the middle - tens of seconds, sometimes minutes. And in those seconds, things go wrong. Your worker gets redeployed. The machine runs out of memory. A spot instance disappears. The process you were counting on is simply gone.
+
+So what happens to the run? With most setups, it's lost. You start again from the beginning, you pay for every token again, and your user waits twice.
+
+**Pydantic AI Absurd** makes that not happen. You call `agent.run()` inside a durable task, and every model call and MCP call is checkpointed into Postgres. If the worker dies halfway through, a new worker picks the task back up and *resumes from the last completed step* - no restart, no re-spent tokens.
+
+It's the same idea as Pydantic AI's Temporal integration. The difference: no Temporal, no Redis, no broker, no daemon. Just the Postgres you already have.
 
 ## Install
 
@@ -10,41 +20,48 @@ It's the Postgres-only analogue of Pydantic AI's Temporal integration: you autho
 uv add pydantic-ai-absurd
 ```
 
-Requires Postgres (for Absurd) and a Pydantic AI `Agent`.
+You'll need a Postgres database (that's where Absurd keeps its state) and a Pydantic AI `Agent`. That's it.
 
 ## Use it
 
-Wrap the agent, write an Absurd task that calls `agent.run(...)`, and spawn the task:
+You author a task, call the agent inside it, spawn it from one place, and run it from another:
 
 ```python
 from absurd_sdk import AsyncAbsurd
 from pydantic_ai import Agent
 from pydantic_ai_absurd import AbsurdAgent
 
-absurd = AsyncAbsurd('postgresql://localhost/absurd', queue_name='agents')
-agent = AbsurdAgent(Agent('openai:gpt-5.2', name='analyst'), absurd)
+absurd = AsyncAbsurd("postgresql://localhost/absurd", queue_name="agents")
+agent = AbsurdAgent(Agent("openai:gpt-5.2", name="analyst"), absurd)
 
-@absurd.register_task(name='analyse')
+# You write the task; the agent is a durable callable inside it.
+@absurd.register_task(name="analyse")
 async def analyse(params, ctx):
-    result = await agent.run(params['prompt'])
-    return {'output': result.output}
+    result = await agent.run(params["prompt"])
+    return {"output": result.output}
 
-# Client side (any process): enqueue a durable run, returns immediately.
-await absurd.spawn('analyse', {'prompt': 'analyse Q3 revenue'})
+# Spawn from anywhere - it just writes to Postgres and returns immediately.
+await absurd.spawn("analyse", {"prompt": "Analyse Q3 revenue"})
 
-# Worker side (separate process / container): claim and run durably.
+# Run the worker in a separate process - it claims the task and runs it.
 await absurd.start_worker()
 ```
 
-If the worker dies mid-run, Absurd re-enqueues the task; a new worker re-runs the handler, the checkpointed model/MCP calls return their cached results, and the run continues from where it stopped.
+If the worker dies mid-run, Absurd makes the task claimable again. A new worker re-runs the handler, the checkpointed model and MCP calls return their cached results instantly, and the run continues from where it stopped. The user gets their answer, and you paid for each call once.
 
-### Two processes
+## The shape
 
-`spawn` only writes a row to Postgres, so the producer and the worker are fully decoupled - run them in separate processes or containers. The task name (`'analyse'`) must be registered in **the worker process** (the one that calls `start_worker()`); the producer just needs the DSN and the name.
+Three things, and they only ever talk through Postgres:
 
-### Continue a conversation
+- **You write the task.** It's a normal async function. The agent is one durable step inside it; you can branch, call the agent twice, do whatever you need.
+- **`spawn` doesn't run the agent.** It records a request to run it and returns immediately, so the web request that triggered it stays fast. The slow work happens elsewhere, later, durably.
+- **The worker does the work.** Run as many as you like - they coordinate through the database, each claiming different tasks. Scale them up and down freely; spawned tasks wait safely in Postgres until a worker is ready.
 
-Pass a serialized `message_history` through the task params and hand it to `agent.run(...)` so a follow-up turn continues the conversation:
+`spawn` and `start_worker` belong in **different processes**, often different containers. Register your tasks in the worker process (the one calling `start_worker()`); the process that only spawns just needs the database URL and the task name.
+
+## Continue a conversation
+
+A single `spawn` is one run. For a chat, carry the prior messages into the next run: `agent.run()` accepts `message_history`, and a finished run hands its messages back.
 
 ```python
 from pydantic import TypeAdapter
@@ -53,20 +70,26 @@ from pydantic_core import to_jsonable_python
 
 _history = TypeAdapter(list[ModelMessage])
 
-@absurd.register_task(name='chat')
+@absurd.register_task(name="chat")
 async def chat(params, ctx):
-    history = _history.validate_python(params['message_history']) if params.get('message_history') else None
-    result = await agent.run(params['prompt'], message_history=history)
-    return {'output': result.output, 'all_messages': to_jsonable_python(result.all_messages())}
+    history = _history.validate_python(params["message_history"]) if params.get("message_history") else None
+    result = await agent.run(params["prompt"], message_history=history)
+    return {"output": result.output, "all_messages": to_jsonable_python(result.all_messages())}
 ```
 
-Persist `all_messages` wherever your app keeps conversation state and feed it back on the next turn.
+Store `all_messages` wherever your app keeps conversation state, and feed it back on the next turn. The run stays durable; the conversation is just data you carry forward.
 
 ## What gets checkpointed
 
-- **Model requests** (`AbsurdModel`) - each `request()` / `request_stream()` is a `ctx.step(...)`; the `ModelResponse` is cached and replayed.
-- **MCP / FastMCP tool calls** (`AbsurdMCPServer`, `AbsurdFastMCPToolset`) - each call is a step.
-- **Plain function toolsets** are left untouched - their Python side effects are expected to be idempotent and cheap to re-run. Wrap anything non-idempotent in `ctx.step(...)` yourself.
+The rule is simple: the expensive, external things are durable; your cheap, idempotent code is not.
+
+- **Model requests** are checkpointed. The `ModelResponse` is cached and replayed, so a crash never re-calls the LLM for a step it already finished.
+- **MCP tool calls** are checkpointed too - a call to an MCP server is a network round-trip, as expensive and external as a model call.
+- **Plain function tools and your own task code** are *not* checkpointed - they're expected to be cheap and idempotent, so they just re-run on replay. If you have a side effect that must happen exactly once, wrap it in `ctx.step(...)` yourself.
+
+## Documentation
+
+Full docs - a step-by-step tutorial, the durability model in detail, tools and MCP, and a production guide - live at the [documentation site](https://kludex.github.io/pydantic-ai-absurd/).
 
 ## Develop
 
@@ -76,9 +99,9 @@ scripts/check     # ruff format --check + ruff check + mypy strict
 scripts/test      # pytest + 100% coverage gate
 ```
 
-Tests run against a real Postgres via `testcontainers`. Docker must be up.
+Tests run against a real Postgres via `testcontainers`, so Docker must be up.
 
-The example under `examples/` can be smoke-tested end-to-end against real OpenAI (kept out of CI - local use only):
+The example under `examples/` can be smoke-tested end to end against real OpenAI (kept out of CI, local use only):
 
 ```bash
 OPENAI_API_KEY=... uv run pytest examples/tests/
