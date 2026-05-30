@@ -8,7 +8,7 @@ Durable, crash-safe background agents for [Pydantic AI](https://github.com/pydan
 flowchart LR
     HTTP[HTTP handler] -->|wake| Absurd[(Postgres<br/>absurd.* schema)]
     Worker[Worker process] -->|claim| Absurd
-    Worker -->|runs| Brain[@brain handler]
+    Worker -->|runs| Brain["@brain handler"]
     Brain -->|agent_run| Agent[AbsurdAgent]
     Agent -->|checkpointed step| Absurd
     Agent -->|LLM / MCP call| LLM[Claude / OpenAI / MCP servers]
