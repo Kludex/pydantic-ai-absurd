@@ -6,7 +6,7 @@ icon: lucide/graduation-cap
 
 This tutorial shows you, step by step, how to take a normal Pydantic AI agent and make a single run of it **survive a crash**.
 
-We'll build it up one piece at a time. Each step adds exactly one new idea, shows you the code, and then explains *why*. By the end you'll have run an agent, killed its worker mid-flight, and watched it pick up exactly where it left off — without calling the model again.
+We'll build it up one piece at a time. Each step adds exactly one new idea, shows you the code, and then explains *why*. By the end you'll have run an agent, killed its worker mid-flight, and watched it pick up exactly where it left off - without calling the model again.
 
 !!! tip "Run it as you read"
     Every snippet here is real. If you have a Postgres handy and an API key set, you can paste these in and watch them work.
@@ -14,7 +14,7 @@ We'll build it up one piece at a time. Each step adds exactly one new idea, show
 ## What you'll need
 
 - A Postgres database. Absurd stores its task state there.
-- A Pydantic AI `Agent` — so an LLM provider key (we'll use `openai:gpt-5.2`).
+- A Pydantic AI `Agent` - so an LLM provider key (we'll use `openai:gpt-5.2`).
 - `pip install pydantic-ai-absurd`.
 
 The first time you connect, Absurd needs its schema and a queue. You do this **once**, at setup time:
@@ -27,7 +27,7 @@ await absurd.create_queue()  # creates the 'agents' queue if it doesn't exist
 ```
 
 !!! note
-    Installing the Absurd schema itself is a one-time migration step that ships with `absurd-sdk`. Think of it like running your database migrations before the app starts — you do it on deploy, not on every run.
+    Installing the Absurd schema itself is a one-time migration step that ships with `absurd-sdk`. Think of it like running your database migrations before the app starts - you do it on deploy, not on every run.
 
 ## Step 1: Wrap your agent
 
@@ -41,10 +41,10 @@ inner = Agent("openai:gpt-5.2", name="analyst")
 agent = AbsurdAgent(inner, absurd)
 ```
 
-That's the only change to your agent. `AbsurdAgent` keeps everything about `inner` — its model, its tools, its output type — but swaps the model (and any MCP tools) for versions that checkpoint each call.
+That's the only change to your agent. `AbsurdAgent` keeps everything about `inner` - its model, its tools, its output type - but swaps the model (and any MCP tools) for versions that checkpoint each call.
 
 !!! warning "The agent needs a name"
-    The `name` isn't decoration — Absurd uses it as the prefix for every checkpoint step, so two agents with durable steps need two distinct names. Here it comes from the inner `Agent(..., name="analyst")`, and `AbsurdAgent` reuses it. If your inner agent has no name, pass one to `AbsurdAgent` directly: `AbsurdAgent(inner, absurd, name="analyst")`. Either way, if there's no name at all you'll get a clear error.
+    The `name` isn't decoration - Absurd uses it as the prefix for every checkpoint step, so two agents with durable steps need two distinct names. Here it comes from the inner `Agent(..., name="analyst")`, and `AbsurdAgent` reuses it. If your inner agent has no name, pass one to `AbsurdAgent` directly: `AbsurdAgent(inner, absurd, name="analyst")`. Either way, if there's no name at all you'll get a clear error.
 
 On its own, the wrapped agent does nothing special yet. The magic only happens when you call it *inside a task*. That's the next step.
 
@@ -61,14 +61,14 @@ async def analyse(params, ctx):
 
 A few things to notice:
 
-- **You write the task.** This is the same shape as Pydantic AI's Temporal integration — you control the workflow, and the agent is one durable step within it. You can do other things in here too: branch, call the agent twice, log, whatever.
+- **You write the task.** This is the same shape as Pydantic AI's Temporal integration - you control the workflow, and the agent is one durable step within it. You can do other things in here too: branch, call the agent twice, log, whatever.
 - `params` is whatever you pass when you spawn the task (more on that in a second). It's plain JSON.
-- `ctx` is the Absurd task context. You usually don't touch it directly — the wrapped agent uses it under the hood to record checkpoints.
+- `ctx` is the Absurd task context. You usually don't touch it directly - the wrapped agent uses it under the hood to record checkpoints.
 - The return value is the task's result, stored in Postgres. Keep it JSON-serializable.
 
 ## Step 3: Spawn it
 
-Now, from anywhere — a FastAPI endpoint, a cron job, a "Generate report" button — you ask for the task to run:
+Now, from anywhere - a FastAPI endpoint, a cron job, a "Generate report" button - you ask for the task to run:
 
 ```python
 handle = await absurd.spawn("analyse", {"prompt": "Analyse Q3 revenue"})
@@ -82,7 +82,7 @@ Here's the important part: **`spawn` doesn't run the agent.** It writes a row to
 
 ## Step 4: Run a worker
 
-Something has to actually *do* the work. That's a worker — usually a separate process:
+Something has to actually *do* the work. That's a worker - usually a separate process:
 
 ```python
 # worker.py
@@ -103,7 +103,7 @@ async def main():
 The worker polls Postgres, claims your spawned task, runs the `analyse` function, and stores the result. `start_worker()` runs until you stop it.
 
 !!! warning "Register your tasks in the worker"
-    The worker can only run tasks it knows about. The `@register_task` decorator must run **in the worker process** before `start_worker()`. The process that *spawns* doesn't need it — it only writes a task name and params to the database.
+    The worker can only run tasks it knows about. The `@register_task` decorator must run **in the worker process** before `start_worker()`. The process that *spawns* doesn't need it - it only writes a task name and params to the database.
 
 That's the full loop. Spawn from one place, run from another, talk only through Postgres.
 
@@ -117,9 +117,9 @@ if result is not None and result.state == "completed":
     print(result.result["output"])
 ```
 
-In a real app you'd typically have the worker write the result somewhere your users can see — a row in your own table, a webhook, a websocket push. `fetch_task_result` is the simple polling version.
+In a real app you'd typically have the worker write the result somewhere your users can see - a row in your own table, a webhook, a websocket push. `fetch_task_result` is the simple polling version.
 
-## Step 6: The payoff — crash and resume
+## Step 6: The payoff - crash and resume
 
 Here's the whole reason we did any of this.
 
@@ -129,7 +129,7 @@ What happens?
 
 1. Absurd notices the task didn't finish and makes it claimable again.
 2. A new worker claims it and runs `analyse` from the top.
-3. `agent.run()` reaches the first model call — but that one is already checkpointed. Instead of calling the LLM again, it returns the **cached** response instantly.
+3. `agent.run()` reaches the first model call - but that one is already checkpointed. Instead of calling the LLM again, it returns the **cached** response instantly.
 4. Execution continues to the second model call, which *hasn't* run yet, and does it for real.
 5. The task completes.
 
@@ -148,4 +148,4 @@ You went from a plain agent to a durable one in five small moves:
 - [x] `start_worker` in a worker process
 - [x] Let crashes resume instead of restart
 
-Now that you've *seen* it work, the next page explains exactly **[how durability works](durability.md)** under the hood — what counts as a checkpoint, what doesn't, and the one surprise to watch out for.
+Now that you've *seen* it work, the next page explains exactly **[how durability works](durability.md)** under the hood - what counts as a checkpoint, what doesn't, and the one surprise to watch out for.

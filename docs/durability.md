@@ -4,13 +4,13 @@ icon: lucide/refresh-cw
 
 # How durability works
 
-The tutorial showed you a run that survived a crash. This page explains *why* it survived — what exactly gets checkpointed, what doesn't, and the one behavior that will surprise you if nobody warns you about it.
+The tutorial showed you a run that survived a crash. This page explains *why* it survived - what exactly gets checkpointed, what doesn't, and the one behavior that will surprise you if nobody warns you about it.
 
-It's worth understanding this. Not because it's complicated — it isn't — but because once you have the model in your head, you'll know precisely what's safe to do inside a task and what isn't.
+It's worth understanding this. Not because it's complicated - it isn't - but because once you have the model in your head, you'll know precisely what's safe to do inside a task and what isn't.
 
 ## A step is a checkpoint
 
-Absurd's core primitive is the **step**. A step is a piece of work that runs once and whose result is recorded in Postgres. When a task re-runs after a crash, any step that already completed doesn't run again — it returns its stored result.
+Absurd's core primitive is the **step**. A step is a piece of work that runs once and whose result is recorded in Postgres. When a task re-runs after a crash, any step that already completed doesn't run again - it returns its stored result.
 
 You don't usually call steps yourself. `AbsurdAgent` does it for you, around the two things that are expensive and external:
 
@@ -29,7 +29,7 @@ flowchart LR
 
 ## What replay looks like
 
-When a worker dies and the task is re-claimed, your task function runs **from the very top again**. That's the part people find counterintuitive at first — there's no magic jump to the middle. The whole function re-executes.
+When a worker dies and the task is re-claimed, your task function runs **from the very top again**. That's the part people find counterintuitive at first - there's no magic jump to the middle. The whole function re-executes.
 
 What makes it cheap is that the *steps* short-circuit:
 
@@ -42,7 +42,7 @@ What makes it cheap is that the *steps* short-circuit:
 So replay is fast and free up to the point where the crash happened, then continues normally. You resume, you don't restart.
 
 !!! tip "The expensive things are the durable things"
-    LLM calls and MCP calls are exactly the operations that cost money, take time, and talk to the outside world. Those are the ones Absurd checkpoints. That's not a coincidence — it's the whole design.
+    LLM calls and MCP calls are exactly the operations that cost money, take time, and talk to the outside world. Those are the ones Absurd checkpoints. That's not a coincidence - it's the whole design.
 
 ## What is *not* a checkpoint
 
@@ -51,15 +51,15 @@ Here's the part to internalize: **your plain Python is not a step.**
 ```python
 @absurd.register_task(name="report")
 async def report(params, ctx):
-    print("starting")          # not a step — runs again on every replay
-    await send_slack("on it")  # not a step — this Slack message goes out AGAIN on replay
+    print("starting")          # not a step - runs again on every replay
+    await send_slack("on it")  # not a step - this Slack message goes out AGAIN on replay
     result = await agent.run(params["prompt"])  # the model calls inside HERE are steps
     return {"output": result.output}
 ```
 
 When the task re-runs, everything that isn't a checkpointed step runs again from scratch. The `print` prints again. The `send_slack` sends again. Only the model (and MCP) calls inside `agent.run()` short-circuit.
 
-This is usually fine — most code in a task is either cheap (logging) or naturally idempotent. But if you have a side effect that *must* happen exactly once, you need to make it a step yourself.
+This is usually fine - most code in a task is either cheap (logging) or naturally idempotent. But if you have a side effect that *must* happen exactly once, you need to make it a step yourself.
 
 ## Making your own steps
 
@@ -99,6 +99,6 @@ This is separate from step checkpointing. Steps make a *single run* resumable; t
 
 ## The one-paragraph summary
 
-Inside a run, **model and MCP calls are checkpoints**, so a crash resumes from the last one without re-spending tokens. Your other Python is **not** a checkpoint, so it re-runs on replay — wrap anything that must happen once in `ctx.step`. Across spawns, an **idempotency key** keeps duplicate triggers from launching duplicate runs.
+Inside a run, **model and MCP calls are checkpoints**, so a crash resumes from the last one without re-spending tokens. Your other Python is **not** a checkpoint, so it re-runs on replay - wrap anything that must happen once in `ctx.step`. Across spawns, an **idempotency key** keeps duplicate triggers from launching duplicate runs.
 
 That's the entire durability model. Next: what happens when your agent uses **[tools and MCP servers](mcp.md)**.
