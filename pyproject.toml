@@ -1,10 +1,10 @@
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling", "hatch-vcs"]
 build-backend = "hatchling.build"
 
 [project]
 name = "pydantic-ai-absurd"
-version = "0.0.1"
+dynamic = ["version"]
 description = "Durable execution of Pydantic AI agents on Postgres via Absurd."
 readme = "README.md"
 license = "MIT"
@@ -50,6 +50,9 @@ docs = [
 [tool.uv]
 default-groups = ["dev"]
 prerelease = "allow"
+
+[tool.hatch.version]
+source = "vcs"
 
 [tool.hatch.build.targets.wheel]
 packages = ["pydantic_ai_absurd"]

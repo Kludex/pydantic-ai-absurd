@@ -1725,7 +1725,6 @@ wheels = [
 
 [[package]]
 name = "pydantic-ai-absurd"
-version = "0.0.1"
 source = { editable = "." }
 dependencies = [
     { name = "absurd-sdk" },
