@@ -80,9 +80,9 @@ Here's the important part: **`spawn` doesn't run the agent.** It writes a row to
 !!! tip "This is why your API stays fast"
     The slow, expensive agent run never blocks the request that triggered it. You spawn and move on.
 
-## Step 4: Run a worker
+## Step 4: Run the work
 
-Something has to actually *do* the work. That's a worker - usually a separate process:
+Something has to actually *do* the work. For trying things out, the simplest way is `work_batch` - it claims the tasks that are waiting, runs them, and returns:
 
 ```python
 # worker.py
@@ -97,13 +97,16 @@ async def main():
         result = await agent.run(params["prompt"])
         return {"output": result.output}
 
-    await absurd.start_worker()  # claims tasks and runs them, forever
+    await absurd.work_batch(batch_size=1)  # (1) run the waiting tasks, then return
 ```
 
-The worker polls Postgres, claims your spawned task, runs the `analyse` function, and stores the result. `start_worker()` runs until you stop it.
+`work_batch` claims your spawned task, runs the `analyse` function, stores the result, and *returns* - so your script finishes. That's exactly what you want while you're learning or testing.
 
-!!! warning "Register your tasks in the worker"
-    The worker can only run tasks it knows about. The `@register_task` decorator must run **in the worker process** before `start_worker()`. The process that *spawns* doesn't need it - it only writes a task name and params to the database.
+!!! note "(1) In production, use `start_worker`"
+    `work_batch` does one pass and stops. A real worker process calls `await absurd.start_worker()` instead, which polls Postgres forever, runs tasks as they arrive, and resumes crashed runs. Same registration, same tasks - it just doesn't return. See [Running in production](deployment.md) for that shape.
+
+!!! warning "Register your tasks where they run"
+    The worker can only run tasks it knows about. The `@register_task` decorator must run **in the process that drains tasks** (the one calling `work_batch` or `start_worker`). The process that *spawns* doesn't need it - it only writes a task name and params to the database.
 
 That's the full loop. Spawn from one place, run from another, talk only through Postgres.
 
@@ -145,7 +148,7 @@ You went from a plain agent to a durable one in five small moves:
 - [x] Wrap the agent with `AbsurdAgent`
 - [x] Write a task with `@absurd.register_task`
 - [x] `spawn` it from your app
-- [x] `start_worker` in a worker process
+- [x] Drain it with `work_batch` (or `start_worker` for a long-running worker)
 - [x] Let crashes resume instead of restart
 
 Now that you've *seen* it work, the next page explains exactly **[how durability works](durability.md)** under the hood - what counts as a checkpoint, what doesn't, and the one surprise to watch out for.

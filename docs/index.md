@@ -39,9 +39,11 @@ async def analyse(params, ctx):
 # Spawn from anywhere - it just writes to Postgres and returns immediately.
 await absurd.spawn("analyse", {"prompt": "Analyse Q3 revenue"})
 
-# Run the worker in a separate process - it claims the task and runs it.
-await absurd.start_worker()
+# Drain the waiting tasks, then return.  # (1) for a long-running worker, use start_worker()
+await absurd.work_batch(batch_size=1)
 ```
+
+> **(1)** `work_batch` runs the tasks that are waiting and stops, which is perfect for a script you want to finish. In a real worker process you'd call `await absurd.start_worker()` instead: it polls forever and resumes crashed runs.
 
 That's the whole shape. You author a task, call the agent inside it, spawn it from one place, run it from another.
 

@@ -43,9 +43,11 @@ async def analyse(params, ctx):
 # Spawn from anywhere - it just writes to Postgres and returns immediately.
 await absurd.spawn("analyse", {"prompt": "Analyse Q3 revenue"})
 
-# Run the worker in a separate process - it claims the task and runs it.
-await absurd.start_worker()
+# Drain the waiting tasks, then return. In a long-running worker, use start_worker().
+await absurd.work_batch(batch_size=1)
 ```
+
+`work_batch` runs the tasks that are waiting and returns, so this script finishes - handy for trying it out. A real worker process calls `await absurd.start_worker()` instead: it polls forever and resumes crashed runs.
 
 If the worker dies mid-run, Absurd makes the task claimable again. A new worker re-runs the handler, the checkpointed model and MCP calls return their cached results instantly, and the run continues from where it stopped. The user gets their answer, and you paid for each call once.
 
