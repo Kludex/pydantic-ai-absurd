@@ -43,8 +43,6 @@ class PlanResult(BaseModel):
     reply: str
     needs_analyst: bool = False
 
-# from_dsn builds and owns the session-log pool and the Absurd client.
-# (Pass absurd=/pool= explicitly instead if you already have them.)
 workflow = await Workflow.from_dsn(os.environ['DATABASE_URL'], queue_name='agents')
 
 planner = AbsurdAgent(
