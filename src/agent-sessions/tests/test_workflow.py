@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+from uuid import uuid4
+
 import anyio
 import pytest
 from absurd_sdk import AsyncAbsurd, JsonValue
+from psycopg import AsyncConnection
 from pydantic_ai import Agent
 from pydantic_ai.messages import ModelMessage, ModelResponse, TextPart
 from pydantic_ai.models.function import AgentInfo, FunctionModel
@@ -42,6 +45,40 @@ async def test_task_name(workflow: Workflow) -> None:
 async def test_workflow_exposes_absurd_and_pool(workflow: Workflow, absurd: AsyncAbsurd, pool: AsyncPool) -> None:
     assert workflow.absurd is absurd
     assert workflow.pool is pool
+
+
+async def test_from_dsn_builds_and_owns_pool_and_absurd(db_dsn: str, pool: AsyncPool) -> None:
+    # The `pool` fixture has already run `apply_migrations`; from_dsn assumes the
+    # schema exists. Create the queue the owned client will use.
+    queue = f'from_dsn_{uuid4().hex[:8]}'
+    async with await AsyncConnection.connect(db_dsn, autocommit=True) as conn:
+        await AsyncAbsurd(conn, queue_name=queue).create_queue()
+
+    async with await Workflow.from_dsn(db_dsn, queue_name=queue, session_lease_poll_seconds=0.05) as workflow:
+        ran: list[str] = []
+
+        @workflow.brain('owned')
+        async def owned(ctx: BrainContext[None]) -> None:
+            ran.append('yes')
+
+        session = await Session.create(workflow.pool)
+        await workflow.wake(session, 'owned')
+        for _ in range(10):
+            await workflow.absurd.work_batch(batch_size=4)
+            await anyio.sleep(0.02)
+
+        assert ran == ['yes']
+
+    # aclose() closed the pool it created.
+    assert workflow.pool.closed
+
+
+async def test_aclose_leaves_injected_resources_open(absurd: AsyncAbsurd, pool: AsyncPool, db_dsn: str) -> None:
+    workflow = Workflow(absurd=absurd, pool=pool)
+    await workflow.aclose()
+    # Injected pool is untouched - still usable.
+    session = await Session.create(pool)
+    assert session.id
 
 
 async def test_independent_workflows_have_separate_registries(absurd: AsyncAbsurd, pool: AsyncPool) -> None:

@@ -197,6 +197,10 @@ class Workflow:
 
     Multiple workflows can coexist in the same process (e.g. different queues)
     - each holds its own brain registry. There is no module-level global state.
+
+    When you already have an Absurd client and a pool, pass them directly. When
+    you only have a DSN, use `Workflow.from_dsn(...)`, which builds and owns both
+    - `aclose()` (or `async with`) then tears down only what it created.
     """
 
     def __init__(
@@ -214,6 +218,60 @@ class Workflow:
         self._on_poison = on_poison
         self._session_lease_poll_seconds = session_lease_poll_seconds
         self._brains: dict[str, BrainDefinition] = {}
+        # Set only when `from_dsn` built these for us; `aclose()` closes exactly
+        # what we own and never touches caller-supplied resources.
+        self._owned_pool: AsyncPool | None = None
+        self._owned_absurd: AsyncAbsurd | None = None
+
+    @classmethod
+    async def from_dsn(
+        cls,
+        dsn: str,
+        *,
+        queue_name: str = 'default',
+        min_size: int = 1,
+        max_size: int = 10,
+        max_wake_depth: int = 20,
+        on_poison: PoisonHandler | None = None,
+        session_lease_poll_seconds: float = 1.0,
+    ) -> Workflow:
+        """Build a workflow that owns its own pool and Absurd client from a DSN.
+
+        The session log needs a pool (many short, concurrent transactions); Absurd
+        needs its own dedicated connection - so we create both from the same DSN
+        rather than sharing one. Both are closed by `aclose()`.
+
+        Assumes the Absurd and `agent_sessions` schemas are already installed; run
+        `apply_migrations(pool)` and the Absurd schema install once at deploy time.
+        """
+        pool: AsyncPool = AsyncConnectionPool(dsn, min_size=min_size, max_size=max_size, open=False)
+        await pool.open(wait=True)
+        absurd = AsyncAbsurd(dsn, queue_name=queue_name)
+        self = cls(
+            absurd=absurd,
+            pool=pool,
+            max_wake_depth=max_wake_depth,
+            on_poison=on_poison,
+            session_lease_poll_seconds=session_lease_poll_seconds,
+        )
+        self._owned_pool = pool
+        self._owned_absurd = absurd
+        return self
+
+    async def aclose(self) -> None:
+        """Close resources this workflow created via `from_dsn`. No-op for injected ones."""
+        if self._owned_absurd is not None:
+            await self._owned_absurd.close()
+            self._owned_absurd = None
+        if self._owned_pool is not None:
+            await self._owned_pool.close()
+            self._owned_pool = None
+
+    async def __aenter__(self) -> Workflow:
+        return self
+
+    async def __aexit__(self, *exc: object) -> None:
+        await self.aclose()
 
     @property
     def absurd(self) -> AsyncAbsurd:
