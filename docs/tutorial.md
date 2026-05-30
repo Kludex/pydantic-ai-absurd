@@ -18,7 +18,17 @@ We'll build it up one piece at a time. Each step adds exactly one new idea, show
 - `pip install pydantic-ai-absurd`.
 
 !!! tip "No Postgres handy?"
-    If you've cloned the repo, `scripts/postgres` starts one in Docker at the exact DSN used below (and `scripts/postgres stop` removes it). The test suite and `examples/` don't need it - they spin up their own throwaway Postgres with testcontainers.
+    Start one in Docker, at the exact DSN used below:
+
+    ```bash
+    docker run -d --name absurd-postgres \
+        -e POSTGRES_DB=absurd \
+        -e POSTGRES_PASSWORD=postgres \
+        -p 5432:5432 \
+        postgres:16-alpine
+    ```
+
+    That's it - `postgresql://postgres:postgres@localhost:5432/absurd` is ready. (If you've cloned the repo, `scripts/postgres` does the same thing for you.)
 
 The first time you connect, Absurd needs its schema and a queue. You do this **once**, at setup time:
 
