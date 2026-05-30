@@ -24,14 +24,14 @@ Two packages, built together:
 
 ## Use a brain
 
-The database needs both schemas installed once: Absurd's (ships as SQL with `absurd-sdk`) and `agent_sessions`' (via `apply_migrations(pool)`, shown below). A full runnable version of this snippet - schema install included - lives in [`examples/readme_snippet.py`](examples/readme_snippet.py).
+The database needs both schemas installed once: Absurd's (ships as SQL with `absurd-sdk`) and `agent_sessions`' (via `apply_migrations(pool)`). The snippet below assumes that's already done; a full runnable version - schema install included - lives in [`examples/readme_snippet.py`](examples/readme_snippet.py).
 
 ```python
 import os
 from uuid import UUID
 
 from absurd_sdk import AsyncAbsurd
-from agent_sessions import Session, Workflow, apply_migrations
+from agent_sessions import Session, Workflow
 from psycopg import AsyncConnection
 from psycopg_pool import AsyncConnectionPool
 from pydantic import BaseModel
@@ -46,11 +46,11 @@ class PlanResult(BaseModel):
     reply: str
     needs_analyst: bool = False
 
-# Bootstrap: one pool for the session log, one autocommit connection for Absurd.
+# Bootstrap (schema already installed): a pool for the session log, an
+# autocommit connection for Absurd.
 dsn = os.environ['DATABASE_URL']
 pool = AsyncConnectionPool(dsn, min_size=1, max_size=4, open=False)
 await pool.open(wait=True)
-await apply_migrations(pool)
 
 absurd_conn = await AsyncConnection.connect(dsn, autocommit=True)
 absurd = AsyncAbsurd(absurd_conn, queue_name='agents')
