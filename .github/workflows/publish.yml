@@ -58,6 +58,12 @@ jobs:
       url: https://pypi.org/project/pydantic-ai-absurd/${{ needs.build.outputs.version }}
 
     steps:
+      - name: Install uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.9.12"
+          enable-cache: false
+
       - name: Download package
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
@@ -65,4 +71,4 @@ jobs:
           path: dist/
 
       - name: Publish distribution 📦 to PyPI
-        uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b # v1.14.0
+        run: uv publish --trusted-publishing always
