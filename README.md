@@ -24,16 +24,13 @@ Two packages, built together:
 
 ## Use a brain
 
-The database needs both schemas installed once: Absurd's (ships as SQL with `absurd-sdk`) and `agent_sessions`' (via `apply_migrations(pool)`). The snippet below assumes that's already done; a full runnable version - schema install included - lives in [`examples/readme_snippet.py`](examples/readme_snippet.py).
+One-time setup the snippet below assumes is already done: install Absurd's schema (ships as SQL with `absurd-sdk`), install `agent_sessions`' (`apply_migrations(pool)`), and create the Absurd queue (`await absurd.create_queue()`). A full runnable version - all of that included - lives in [`examples/readme_snippet.py`](examples/readme_snippet.py).
 
 ```python
 import os
 from uuid import UUID
 
-from absurd_sdk import AsyncAbsurd
 from agent_sessions import Session, Workflow
-from psycopg import AsyncConnection
-from psycopg_pool import AsyncConnectionPool
 from pydantic import BaseModel
 from pydantic_ai import Agent
 from pydantic_ai_absurd import AbsurdAgent
@@ -46,23 +43,15 @@ class PlanResult(BaseModel):
     reply: str
     needs_analyst: bool = False
 
-# Bootstrap (schema already installed): a pool for the session log, an
-# autocommit connection for Absurd.
-dsn = os.environ['DATABASE_URL']
-pool = AsyncConnectionPool(dsn, min_size=1, max_size=4, open=False)
-await pool.open(wait=True)
-
-absurd_conn = await AsyncConnection.connect(dsn, autocommit=True)
-absurd = AsyncAbsurd(absurd_conn, queue_name='agents')
-await absurd.create_queue()
-
-workflow = Workflow(absurd=absurd, pool=pool)
+# from_dsn builds and owns the session-log pool and the Absurd client.
+# (Pass absurd=/pool= explicitly instead if you already have them.)
+workflow = await Workflow.from_dsn(os.environ['DATABASE_URL'], queue_name='agents')
 
 planner = AbsurdAgent(
     Agent('openai:gpt-5.2', name='planner', output_type=PlanResult),
-    absurd,
+    workflow.absurd,
 )
-analyst = AbsurdAgent(Agent('openai:gpt-5.2', name='analyst'), absurd)
+analyst = AbsurdAgent(Agent('openai:gpt-5.2', name='analyst'), workflow.absurd)
 
 @workflow.brain('planner')
 async def planner_brain(ctx):
