@@ -56,7 +56,7 @@ if __name__ == "__main__":
 
 That's the whole shape. You author a task, call the agent inside it, spawn it from one place, run it from another.
 
-- **You write the task.** Every model call and MCP tool call inside `agent.run()` is a checkpoint. (Plain function tools aren't: they're expected to be cheap and idempotent, so they just re-run. More on that in [Tools & MCP servers](mcp.md).)
+- **You write the task.** Every model call, MCP call, and function tool call inside `agent.run()` is a checkpoint, so a side effect runs once even across a crash. More on that in [Tools & MCP servers](mcp.md).
 - **`spawn` doesn't run the agent.** It records a request to run it, durably, somewhere, and returns immediately, so your web request stays fast.
 - **The worker does the work.** If it crashes mid-run, another worker resumes from the last checkpoint instead of starting over.
 
@@ -84,7 +84,7 @@ The task lives in Postgres, so the side that *asks* for work and the side that *
 
 -   :material-restore: __Crashes resume, they don't restart__
 
-    Completed model and MCP calls replay from their checkpoint. A redeploy mid-run costs you nothing.
+    Completed model, MCP, and tool calls replay from their checkpoint. A redeploy mid-run costs you nothing.
 
 -   :material-currency-usd-off: __Tokens are spent once__
 

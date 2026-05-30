@@ -12,10 +12,10 @@ from pydantic_ai.mcp import MCPToolset
 from pydantic_ai.messages import AgentStreamEvent, ModelRequest, TextPart, UserPromptPart
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 from pydantic_ai.tools import RunContext
-from pydantic_ai.toolsets import FunctionToolset
+from pydantic_ai.toolsets import ExternalToolset, FunctionToolset
 from pydantic_core import to_jsonable_python
 
-from pydantic_ai_absurd import AbsurdAgent, AbsurdMCPToolset, AbsurdModel
+from pydantic_ai_absurd import AbsurdAgent, AbsurdFunctionToolset, AbsurdMCPToolset, AbsurdModel
 
 from .conftest import running_task_context
 
@@ -46,7 +46,7 @@ async def test_model_swapped_with_absurd_model(absurd: AsyncAbsurd) -> None:
     assert isinstance(agent.model, AbsurdModel)
 
 
-async def test_function_toolsets_are_not_wrapped(absurd: AsyncAbsurd) -> None:
+async def test_function_toolsets_are_wrapped(absurd: AsyncAbsurd) -> None:
     toolset = FunctionToolset[None]()
 
     @toolset.tool_plain
@@ -55,8 +55,16 @@ async def test_function_toolsets_are_not_wrapped(absurd: AsyncAbsurd) -> None:
 
     inner = Agent(_make_model(), toolsets=[toolset], name='a')
     agent = AbsurdAgent(inner, absurd, name='a')
-    # Plain function toolsets pass through unchanged.
-    assert list(agent.toolsets)[0].__class__.__name__ != 'AbsurdMCPToolset'
+    assert any(isinstance(t, AbsurdFunctionToolset) for t in agent.toolsets)
+
+
+async def test_other_toolsets_pass_through_unwrapped(absurd: AsyncAbsurd) -> None:
+    # A toolset that is neither MCP nor a FunctionToolset is left as-is: we only
+    # checkpoint the calls we understand (model, MCP, function tools).
+    external = ExternalToolset[None](tool_defs=[])
+    inner = Agent(_make_model(), toolsets=[external], name='a')
+    agent = AbsurdAgent(inner, absurd, name='a')
+    assert any(t is external for t in agent.toolsets)
 
 
 async def test_in_process_mcp_toolsets_are_wrapped(absurd: AsyncAbsurd) -> None:

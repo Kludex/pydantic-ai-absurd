@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any
 from absurd_sdk import AsyncAbsurd
 from pydantic_ai import (
     AbstractToolset,
+    FunctionToolset,
     _instructions,
     _utils,
     messages as _messages,
@@ -31,6 +32,7 @@ from pydantic_ai.result import StreamedRunResult
 from pydantic_ai.run import AgentRunResultEvent
 from pydantic_ai.tools import AgentDepsT, AgentNativeTool, DeferredToolResults, Tool, ToolFuncEither
 
+from ._function_toolset import AbsurdFunctionToolset
 from ._mcp import AbsurdMCPToolset
 from ._model import AbsurdModel
 from ._utils import StepConfig, current_async_context, require_async_context
@@ -42,16 +44,15 @@ if TYPE_CHECKING:
 class AbsurdAgent(WrapperAgent[AgentDepsT, OutputDataT]):
     """Wrap a Pydantic AI agent so its `run()` is durable when called inside an Absurd task.
 
-    Call `await agent.run(...)` from within an Absurd task handler and every model call and
-    MCP call inside the run is checkpointed via `ctx.step(...)`. A worker crash mid-run
-    re-runs the task, but the checkpointed steps return their cached results - so the run
-    resumes from the last completed step instead of restarting, and no tokens are re-spent.
+    Call `await agent.run(...)` from within an Absurd task handler and every model call,
+    MCP call, and function tool call inside the run is checkpointed via `ctx.step(...)`. A
+    worker crash mid-run re-runs the task, but the checkpointed steps return their cached
+    results - so the run resumes from the last completed step instead of restarting, no
+    tokens are re-spent, and side effects run once.
 
-    The wrapped model is replaced with `AbsurdModel`; any `MCPToolset` is replaced with
-    its Absurd counterpart. Plain function toolsets are left untouched - their Python
-    side-effects are expected to be idempotent and cheap to re-run (the expensive,
-    non-idempotent things live behind LLM calls and MCP calls, both of which are
-    checkpointed).
+    The wrapped model is replaced with `AbsurdModel`; `MCPToolset` and `FunctionToolset`
+    are replaced with their Absurd counterparts so their tool calls are checkpointed too.
+    A checkpointed tool's return value is stored in Postgres, so it must be JSON-serializable.
 
     You author the task; the agent is a durable callable inside it:
 
@@ -108,6 +109,12 @@ class AbsurdAgent(WrapperAgent[AgentDepsT, OutputDataT]):
     def _absurdify_toolset(self, toolset: AbstractToolset[AgentDepsT]) -> AbstractToolset[AgentDepsT]:
         if isinstance(toolset, MCPToolset):
             return AbsurdMCPToolset(
+                wrapped=toolset,
+                step_name_prefix=self._step_prefix,
+                step_config=self._mcp_step_config,
+            )
+        if isinstance(toolset, FunctionToolset):
+            return AbsurdFunctionToolset(
                 wrapped=toolset,
                 step_name_prefix=self._step_prefix,
                 step_config=self._mcp_step_config,

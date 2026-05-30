@@ -12,10 +12,11 @@ It's worth understanding this. Not because it's complicated, it isn't, but becau
 
 Absurd's core primitive is the **step**. A step is a piece of work that runs once and whose result is recorded in Postgres. When a task re-runs after a crash, any step that already completed doesn't run again, it returns its stored result.
 
-You don't usually call steps yourself. `AbsurdAgent` does it for you, around the two things that are expensive and external:
+You don't usually call steps yourself. `AbsurdAgent` does it for you, around every call the agent makes during a run:
 
 - **Every model request.** Each call to the LLM is wrapped in a step. The `ModelResponse` is serialized to Postgres.
 - **Every MCP tool call.** Each call to an MCP server is a step too.
+- **Every function tool call.** Your own `@tool` functions are wrapped as well, so a tool with a side effect runs exactly once.
 
 So a single `agent.run()` with one tool call becomes a little chain of checkpoints:
 
@@ -42,7 +43,7 @@ What makes it cheap is that the *steps* short-circuit:
 So replay is fast and free up to the point where the crash happened, then continues normally. You resume, you don't restart.
 
 !!! tip "The expensive things are the durable things"
-    LLM calls and MCP calls are exactly the operations that cost money, take time, and talk to the outside world. Those are the ones Absurd checkpoints. That's not a coincidence, it's the whole design.
+    Model calls, MCP calls, and tool calls are exactly the operations that cost money, take time, or change the outside world. Those are the ones Absurd checkpoints. That's not a coincidence, it's the whole design.
 
 ## What is *not* a checkpoint
 
@@ -57,7 +58,7 @@ async def report(params, ctx):
     return {"output": result.output}
 ```
 
-When the task re-runs, everything that isn't a checkpointed step runs again from scratch. The `print` prints again. The `send_slack` sends again. Only the model (and MCP) calls inside `agent.run()` short-circuit.
+When the task re-runs, everything that isn't a checkpointed step runs again from scratch. The `print` prints again. The `send_slack` sends again. Only the calls *inside* `agent.run()`, the model, MCP, and function tool calls, short-circuit.
 
 This is usually fine, most code in a task is either cheap (logging) or naturally idempotent. But if you have a side effect that *must* happen exactly once, you need to make it a step yourself.
 
@@ -100,6 +101,6 @@ This is separate from step checkpointing. Steps make a *single run* resumable; t
 
 ## The one-paragraph summary
 
-Inside a run, **model and MCP calls are checkpoints**, so a crash resumes from the last one without re-spending tokens. Your other Python is **not** a checkpoint, so it re-runs on replay, wrap anything that must happen once in `ctx.step`. Across spawns, an **idempotency key** keeps duplicate triggers from launching duplicate runs.
+Inside a run, **model, MCP, and tool calls are checkpoints**, so a crash resumes from the last one without re-spending tokens or repeating a side effect. The plain Python in your task body is **not** a checkpoint, so it re-runs on replay, wrap anything there that must happen once in `ctx.step`. Across spawns, an **idempotency key** keeps duplicate triggers from launching duplicate runs.
 
 That's the entire durability model. Next: what happens when your agent uses **[tools and MCP servers](mcp.md)**.
