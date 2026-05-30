@@ -43,7 +43,7 @@ async def main() -> None:
             absurd = AsyncAbsurd(conn, queue_name="agents")
             await absurd.create_queue()
 
-            agent = AbsurdAgent(Agent("openai:gpt-5.2", name="analyst"), absurd, name="analyst")
+            agent = AbsurdAgent(Agent("openai:gpt-5.2", name="analyst"), absurd)
 
             # Author the task; call agent.run() inside it. Each model/MCP call is
             # checkpointed, so a crash mid-run resumes from the last completed step.

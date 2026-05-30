@@ -22,7 +22,7 @@ from pydantic_ai import Agent
 from pydantic_ai_absurd import AbsurdAgent
 
 absurd = AsyncAbsurd('postgresql://localhost/absurd', queue_name='agents')
-agent = AbsurdAgent(Agent('openai:gpt-5.2', name='analyst'), absurd, name='analyst')
+agent = AbsurdAgent(Agent('openai:gpt-5.2', name='analyst'), absurd)
 
 @absurd.register_task(name='analyse')
 async def analyse(params, ctx):

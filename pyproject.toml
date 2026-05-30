@@ -43,6 +43,9 @@ dev = [
     # fixtures spin up a real MCP server, which needs the server support.
     "fastmcp-slim[server]>=3.3.0",
 ]
+docs = [
+    "zensical>=0.0.43",
+]
 
 [tool.uv]
 default-groups = ["dev"]
