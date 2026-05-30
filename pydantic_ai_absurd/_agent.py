@@ -1,14 +1,17 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator, Iterator, Sequence
-from contextlib import asynccontextmanager, contextmanager
-from typing import Any
+from contextlib import AbstractAsyncContextManager, asynccontextmanager, contextmanager
+from typing import TYPE_CHECKING, Any
 
 from absurd_sdk import AsyncAbsurd
 from pydantic_ai import (
     AbstractToolset,
+    _instructions,
     _utils,
     messages as _messages,
+    models,
+    usage as _usage,
 )
 from pydantic_ai.agent import (
     AbstractAgent,
@@ -18,16 +21,22 @@ from pydantic_ai.agent import (
     ParallelExecutionMode,
     WrapperAgent,
 )
+from pydantic_ai.agent.abstract import AgentMetadata, AgentModelSettings, AgentRetries, RunOutputDataT
+from pydantic_ai.capabilities import AgentCapability
 from pydantic_ai.exceptions import UserError
 from pydantic_ai.mcp import MCPToolset
 from pydantic_ai.models import Model
-from pydantic_ai.output import OutputDataT
+from pydantic_ai.output import OutputDataT, OutputSpec
 from pydantic_ai.result import StreamedRunResult
-from pydantic_ai.tools import AgentDepsT
+from pydantic_ai.run import AgentRunResultEvent
+from pydantic_ai.tools import AgentDepsT, AgentNativeTool, DeferredToolResults, Tool, ToolFuncEither
 
 from ._mcp import AbsurdMCPToolset
 from ._model import AbsurdModel
 from ._utils import StepConfig, current_async_context, require_async_context
+
+if TYPE_CHECKING:
+    from pydantic_ai.agent.spec import AgentSpec
 
 
 class AbsurdAgent(WrapperAgent[AgentDepsT, OutputDataT]):
@@ -142,18 +151,70 @@ class AbsurdAgent(WrapperAgent[AgentDepsT, OutputDataT]):
     async def run(
         self,
         user_prompt: str | Sequence[_messages.UserContent] | None = None,
-        **kwargs: Any,
+        *,
+        output_type: OutputSpec[RunOutputDataT] | None = None,
+        message_history: Sequence[_messages.ModelMessage] | None = None,
+        deferred_tool_results: DeferredToolResults | None = None,
+        conversation_id: str | None = None,
+        model: models.Model | models.KnownModelName | str | None = None,
+        instructions: _instructions.AgentInstructions[AgentDepsT] = None,
+        deps: AgentDepsT = None,  # type: ignore[assignment]
+        model_settings: AgentModelSettings[AgentDepsT] | None = None,
+        usage_limits: _usage.UsageLimits | None = None,
+        usage: _usage.RunUsage | None = None,
+        metadata: AgentMetadata[AgentDepsT] | None = None,
+        retries: int | AgentRetries | None = None,
+        infer_name: bool = True,
+        toolsets: Sequence[AbstractToolset[AgentDepsT]] | None = None,
+        event_stream_handler: EventStreamHandler[AgentDepsT] | None = None,
+        capabilities: Sequence[AgentCapability[AgentDepsT]] | None = None,
+        spec: dict[str, Any] | AgentSpec | None = None,
     ) -> AgentRunResult[Any]:
-        self._reject_non_absurd_model(kwargs.get('model'))
+        self._reject_non_absurd_model(model)
         require_async_context()
         with self._absurd_overrides():
-            result: AgentRunResult[Any] = await super().run(user_prompt, **kwargs)
-        return result
+            return await super().run(
+                user_prompt,
+                output_type=output_type,
+                message_history=message_history,
+                deferred_tool_results=deferred_tool_results,
+                conversation_id=conversation_id,
+                model=model,
+                instructions=instructions,
+                deps=deps,
+                model_settings=model_settings,
+                usage_limits=usage_limits,
+                usage=usage,
+                metadata=metadata,
+                retries=retries,
+                infer_name=infer_name,
+                toolsets=toolsets,
+                event_stream_handler=event_stream_handler,
+                capabilities=capabilities,
+                spec=spec,
+            )
 
     def run_sync(
         self,
         user_prompt: str | Sequence[_messages.UserContent] | None = None,
-        **kwargs: Any,
+        *,
+        output_type: OutputSpec[RunOutputDataT] | None = None,
+        message_history: Sequence[_messages.ModelMessage] | None = None,
+        deferred_tool_results: DeferredToolResults | None = None,
+        conversation_id: str | None = None,
+        model: models.Model | models.KnownModelName | str | None = None,
+        instructions: _instructions.AgentInstructions[AgentDepsT] = None,
+        deps: AgentDepsT = None,  # type: ignore[assignment]
+        model_settings: AgentModelSettings[AgentDepsT] | None = None,
+        usage_limits: _usage.UsageLimits | None = None,
+        usage: _usage.RunUsage | None = None,
+        metadata: AgentMetadata[AgentDepsT] | None = None,
+        retries: int | AgentRetries | None = None,
+        infer_name: bool = True,
+        toolsets: Sequence[AbstractToolset[AgentDepsT]] | None = None,
+        event_stream_handler: EventStreamHandler[AgentDepsT] | None = None,
+        capabilities: Sequence[AgentCapability[AgentDepsT]] | None = None,
+        spec: dict[str, Any] | AgentSpec | None = None,
     ) -> AgentRunResult[Any]:
         raise UserError(
             'AbsurdAgent.run_sync() is not supported: the Absurd task handler is already async. '
@@ -164,9 +225,43 @@ class AbsurdAgent(WrapperAgent[AgentDepsT, OutputDataT]):
     async def iter(
         self,
         user_prompt: str | Sequence[_messages.UserContent] | None = None,
-        **kwargs: Any,
+        *,
+        output_type: OutputSpec[RunOutputDataT] | None = None,
+        message_history: Sequence[_messages.ModelMessage] | None = None,
+        deferred_tool_results: DeferredToolResults | None = None,
+        conversation_id: str | None = None,
+        model: models.Model | models.KnownModelName | str | None = None,
+        instructions: _instructions.AgentInstructions[AgentDepsT] = None,
+        deps: AgentDepsT = None,  # type: ignore[assignment]
+        model_settings: AgentModelSettings[AgentDepsT] | None = None,
+        usage_limits: _usage.UsageLimits | None = None,
+        usage: _usage.RunUsage | None = None,
+        metadata: AgentMetadata[AgentDepsT] | None = None,
+        retries: int | AgentRetries | None = None,
+        infer_name: bool = True,
+        toolsets: Sequence[AbstractToolset[AgentDepsT]] | None = None,
+        capabilities: Sequence[AgentCapability[AgentDepsT]] | None = None,
+        spec: dict[str, Any] | AgentSpec | None = None,
     ) -> AsyncIterator[AgentRun[AgentDepsT, Any]]:
-        self._reject_non_absurd_model(kwargs.get('model'))
+        self._reject_non_absurd_model(model)
+        kwargs: dict[str, Any] = dict(
+            output_type=output_type,
+            message_history=message_history,
+            deferred_tool_results=deferred_tool_results,
+            conversation_id=conversation_id,
+            model=model,
+            instructions=instructions,
+            deps=deps,
+            model_settings=model_settings,
+            usage_limits=usage_limits,
+            usage=usage,
+            metadata=metadata,
+            retries=retries,
+            infer_name=infer_name,
+            toolsets=toolsets,
+            capabilities=capabilities,
+            spec=spec,
+        )
         if current_async_context() is None:
             async with super().iter(user_prompt, **kwargs) as run:
                 yield run
@@ -178,8 +273,24 @@ class AbsurdAgent(WrapperAgent[AgentDepsT, OutputDataT]):
     def run_stream_events(
         self,
         user_prompt: str | Sequence[_messages.UserContent] | None = None,
-        **kwargs: Any,
-    ) -> Any:
+        *,
+        output_type: OutputSpec[RunOutputDataT] | None = None,
+        message_history: Sequence[_messages.ModelMessage] | None = None,
+        deferred_tool_results: DeferredToolResults | None = None,
+        conversation_id: str | None = None,
+        model: models.Model | models.KnownModelName | str | None = None,
+        instructions: _instructions.AgentInstructions[AgentDepsT] = None,
+        deps: AgentDepsT = None,  # type: ignore[assignment]
+        model_settings: AgentModelSettings[AgentDepsT] | None = None,
+        usage_limits: _usage.UsageLimits | None = None,
+        usage: _usage.RunUsage | None = None,
+        metadata: AgentMetadata[AgentDepsT] | None = None,
+        retries: int | AgentRetries | None = None,
+        infer_name: bool = True,
+        toolsets: Sequence[AbstractToolset[AgentDepsT]] | None = None,
+        capabilities: Sequence[AgentCapability[AgentDepsT]] | None = None,
+        spec: dict[str, Any] | AgentSpec | None = None,
+    ) -> AbstractAsyncContextManager[AsyncIterator[_messages.AgentStreamEvent | AgentRunResultEvent[Any]]]:
         raise UserError(
             '`agent.run_stream_events()` cannot be used with Absurd. Set an '
             '`event_stream_handler` on the agent and use `agent.run()` instead.'
@@ -189,14 +300,50 @@ class AbsurdAgent(WrapperAgent[AgentDepsT, OutputDataT]):
     async def run_stream(
         self,
         user_prompt: str | Sequence[_messages.UserContent] | None = None,
-        **kwargs: Any,
+        *,
+        output_type: OutputSpec[RunOutputDataT] | None = None,
+        message_history: Sequence[_messages.ModelMessage] | None = None,
+        deferred_tool_results: DeferredToolResults | None = None,
+        conversation_id: str | None = None,
+        model: models.Model | models.KnownModelName | str | None = None,
+        instructions: _instructions.AgentInstructions[AgentDepsT] = None,
+        deps: AgentDepsT = None,  # type: ignore[assignment]
+        model_settings: AgentModelSettings[AgentDepsT] | None = None,
+        usage_limits: _usage.UsageLimits | None = None,
+        usage: _usage.RunUsage | None = None,
+        metadata: AgentMetadata[AgentDepsT] | None = None,
+        retries: int | AgentRetries | None = None,
+        infer_name: bool = True,
+        toolsets: Sequence[AbstractToolset[AgentDepsT]] | None = None,
+        event_stream_handler: EventStreamHandler[AgentDepsT] | None = None,
+        capabilities: Sequence[AgentCapability[AgentDepsT]] | None = None,
+        spec: dict[str, Any] | AgentSpec | None = None,
     ) -> AsyncIterator[StreamedRunResult[AgentDepsT, Any]]:
         if current_async_context() is not None:
             raise UserError(
                 '`agent.run_stream()` cannot be used inside an Absurd task. Set an '
                 '`event_stream_handler` on the agent and use `agent.run()` instead.'
             )
-        async with super().run_stream(user_prompt, **kwargs) as result:
+        async with super().run_stream(
+            user_prompt,
+            output_type=output_type,
+            message_history=message_history,
+            deferred_tool_results=deferred_tool_results,
+            conversation_id=conversation_id,
+            model=model,
+            instructions=instructions,
+            deps=deps,
+            model_settings=model_settings,
+            usage_limits=usage_limits,
+            usage=usage,
+            metadata=metadata,
+            retries=retries,
+            infer_name=infer_name,
+            toolsets=toolsets,
+            event_stream_handler=event_stream_handler,
+            capabilities=capabilities,
+            spec=spec,
+        ) as result:
             yield result
 
     @staticmethod
@@ -205,9 +352,32 @@ class AbsurdAgent(WrapperAgent[AgentDepsT, OutputDataT]):
             raise UserError('Non-Absurd model cannot be overridden at run time; set `model` at agent construction.')
 
     @contextmanager
-    def override(self, **kwargs: Any) -> Iterator[None]:
-        model = kwargs.get('model', _utils.UNSET)
+    def override(
+        self,
+        *,
+        name: str | _utils.Unset = _utils.UNSET,
+        deps: AgentDepsT | _utils.Unset = _utils.UNSET,
+        model: models.Model | models.KnownModelName | str | _utils.Unset = _utils.UNSET,
+        toolsets: Sequence[AbstractToolset[AgentDepsT]] | _utils.Unset = _utils.UNSET,
+        tools: Sequence[Tool[AgentDepsT] | ToolFuncEither[AgentDepsT, ...]] | _utils.Unset = _utils.UNSET,
+        native_tools: Sequence[AgentNativeTool[AgentDepsT]] | _utils.Unset = _utils.UNSET,
+        instructions: _instructions.AgentInstructions[AgentDepsT] | _utils.Unset = _utils.UNSET,
+        model_settings: AgentModelSettings[AgentDepsT] | _utils.Unset = _utils.UNSET,
+        retries: int | AgentRetries | _utils.Unset = _utils.UNSET,
+        spec: dict[str, Any] | AgentSpec | None = None,
+    ) -> Iterator[None]:
         if _utils.is_set(model) and not isinstance(model, AbsurdModel):
             raise UserError('Non-Absurd model cannot be overridden inside an Absurd task; set it at construction time.')
-        with super().override(**kwargs):
+        with super().override(
+            name=name,
+            deps=deps,
+            model=model,
+            toolsets=toolsets,
+            tools=tools,
+            native_tools=native_tools,
+            instructions=instructions,
+            model_settings=model_settings,
+            retries=retries,
+            spec=spec,
+        ):
             yield
