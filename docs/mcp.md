@@ -33,7 +33,7 @@ This is the same guarantee model and MCP calls get, and it's why durable-by-defa
     A checkpointed tool's return value is stored in Postgres, so it has to be JSON-serializable (the same constraint a task's return value has). Return plain data, not live objects like an open connection.
 
 !!! tip "Truly pure tools just pay a tiny write"
-    A pure tool like `add(2, 3)` is checkpointed too, which costs one small Postgres write per call. That's almost always worth it for the once-only guarantee on the tools that *do* matter. If a hot, pure tool ever shows up in a profile, that's the moment to reach for a tuned `StepConfig`, not before.
+    A pure tool like `add(2, 3)` is checkpointed too, which costs one small Postgres write per call. That's almost always worth it for the once-only guarantee on the tools that *do* matter.
 
 ## MCP servers are checkpointed too
 

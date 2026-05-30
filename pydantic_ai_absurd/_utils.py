@@ -2,14 +2,6 @@ from __future__ import annotations
 
 from absurd_sdk import AsyncTaskContext, get_current_context
 from pydantic_ai.exceptions import UserError
-from typing_extensions import TypedDict
-
-
-class StepConfig(TypedDict, total=False):
-    """Configuration applied to every Absurd step spawned by a wrapped agent."""
-
-    max_attempts: int
-    heartbeat_seconds: int
 
 
 def current_async_context() -> AsyncTaskContext | None:

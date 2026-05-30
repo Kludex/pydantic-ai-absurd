@@ -11,7 +11,7 @@ from pydantic_ai.messages import InstructionPart
 from pydantic_ai.tools import AgentDepsT, RunContext, ToolDefinition
 from typing_extensions import Self
 
-from ._utils import StepConfig, current_async_context
+from ._utils import current_async_context
 
 R = TypeVar('R')
 
@@ -55,10 +55,8 @@ class AbsurdMCPToolset(WrapperToolset[AgentDepsT]):
         wrapped: MCPToolset[AgentDepsT],
         *,
         step_name_prefix: str,
-        step_config: StepConfig | None = None,
     ) -> None:
         super().__init__(wrapped)
-        self._step_config: StepConfig = step_config or {}
         self._step_name_prefix = step_name_prefix
         id_suffix = f'__{wrapped.id}' if wrapped.id else ''
         self._name = f'{step_name_prefix}__mcp_server{id_suffix}'
