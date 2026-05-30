@@ -1,0 +1,30 @@
+#!/bin/sh -e
+
+# Spin up a local Postgres for trying out the examples and docs snippets.
+# The tests and examples/ use testcontainers and do NOT need this.
+#
+#   scripts/postgres          start it (idempotent)
+#   scripts/postgres stop     remove it
+#
+# Connect with:  postgresql://postgres:postgres@localhost:5432/absurd
+
+NAME=pydantic-ai-absurd-postgres
+
+if [ "$1" = "stop" ]; then
+    docker rm -f "$NAME"
+    exit 0
+fi
+
+if [ "$(docker ps -q -f "name=^${NAME}$")" ]; then
+    echo "$NAME is already running."
+else
+    docker run -d --rm \
+        --name "$NAME" \
+        -e POSTGRES_DB=absurd \
+        -e POSTGRES_PASSWORD=postgres \
+        -p 5432:5432 \
+        postgres:16-alpine
+    echo "Started $NAME."
+fi
+
+echo "DSN: postgresql://postgres:postgres@localhost:5432/absurd"

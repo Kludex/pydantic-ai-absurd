@@ -17,12 +17,15 @@ We'll build it up one piece at a time. Each step adds exactly one new idea, show
 - A Pydantic AI `Agent` - so an LLM provider key (we'll use `openai:gpt-5.2`).
 - `pip install pydantic-ai-absurd`.
 
+!!! tip "No Postgres handy?"
+    If you've cloned the repo, `scripts/postgres` starts one in Docker at the exact DSN used below (and `scripts/postgres stop` removes it). The test suite and `examples/` don't need it - they spin up their own throwaway Postgres with testcontainers.
+
 The first time you connect, Absurd needs its schema and a queue. You do this **once**, at setup time:
 
 ```python
 from absurd_sdk import AsyncAbsurd
 
-absurd = AsyncAbsurd("postgresql://localhost/absurd", queue_name="agents")
+absurd = AsyncAbsurd("postgresql://postgres:postgres@localhost:5432/absurd", queue_name="agents")
 await absurd.create_queue()  # creates the 'agents' queue if it doesn't exist
 ```
 
@@ -87,7 +90,7 @@ Something has to actually *do* the work. That's a worker - usually a separate pr
 ```python
 # worker.py
 async def main():
-    absurd = AsyncAbsurd("postgresql://localhost/absurd", queue_name="agents")
+    absurd = AsyncAbsurd("postgresql://postgres:postgres@localhost:5432/absurd", queue_name="agents")
 
     inner = Agent("openai:gpt-5.2", name="analyst")
     agent = AbsurdAgent(inner, absurd)
