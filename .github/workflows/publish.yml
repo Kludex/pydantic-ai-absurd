@@ -37,7 +37,7 @@ jobs:
       - name: Inspect package version
         id: inspect_package
         run: |
-          version=$(uvx hatchling version)
+          version=$(uvx --with hatch-vcs hatchling version)
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
       - name: Upload package
