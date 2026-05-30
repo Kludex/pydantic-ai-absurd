@@ -38,13 +38,13 @@ from pydantic_ai import Agent
 from pydantic_ai_absurd import AbsurdAgent
 
 inner = Agent("openai:gpt-5.2", name="analyst")
-agent = AbsurdAgent(inner, absurd, name="analyst")
+agent = AbsurdAgent(inner, absurd)
 ```
 
 That's the only change to your agent. `AbsurdAgent` keeps everything about `inner` — its model, its tools, its output type — but swaps the model (and any MCP tools) for versions that checkpoint each call.
 
 !!! warning "The agent needs a name"
-    `name="analyst"` isn't decoration — Absurd uses it as the prefix for every checkpoint step. Two agents with durable steps need two distinct names. If you forget it, you'll get a clear error telling you so.
+    The `name` isn't decoration — Absurd uses it as the prefix for every checkpoint step, so two agents with durable steps need two distinct names. Here it comes from the inner `Agent(..., name="analyst")`, and `AbsurdAgent` reuses it. If your inner agent has no name, pass one to `AbsurdAgent` directly: `AbsurdAgent(inner, absurd, name="analyst")`. Either way, if there's no name at all you'll get a clear error.
 
 On its own, the wrapped agent does nothing special yet. The magic only happens when you call it *inside a task*. That's the next step.
 
@@ -90,7 +90,7 @@ async def main():
     absurd = AsyncAbsurd("postgresql://localhost/absurd", queue_name="agents")
 
     inner = Agent("openai:gpt-5.2", name="analyst")
-    agent = AbsurdAgent(inner, absurd, name="analyst")
+    agent = AbsurdAgent(inner, absurd)
 
     @absurd.register_task(name="analyse")
     async def analyse(params, ctx):

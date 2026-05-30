@@ -1,6 +1,6 @@
 [project]
 
-site_name = "pydantic-ai-absurd"
+site_name = "Pydantic AI Absurd"
 site_description = "Durable execution for Pydantic AI agents, on Postgres alone."
 site_author = "Marcelo Trylesinski"
 #site_url = "https://kludex.github.io/pydantic-ai-absurd/"
@@ -12,7 +12,7 @@ Copyright &copy; 2026 Marcelo Trylesinski
 """
 
 nav = [
-  { "pydantic-ai-absurd" = "index.md" },
+  { "Pydantic AI Absurd" = "index.md" },
   { "Tutorial - User Guide" = "tutorial.md" },
   { "How durability works" = "durability.md" },
   { "Tools & MCP servers" = "mcp.md" },

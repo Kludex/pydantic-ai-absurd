@@ -41,7 +41,7 @@ flowchart LR
     ```python
     # Registers the tasks and runs them.
     absurd = AsyncAbsurd(DATABASE_URL, queue_name="agents")
-    agent = AbsurdAgent(Agent("openai:gpt-5.2", name="analyst"), absurd, name="analyst")
+    agent = AbsurdAgent(Agent("openai:gpt-5.2", name="analyst"), absurd)
 
     @absurd.register_task(name="analyse")
     async def analyse(params, ctx):

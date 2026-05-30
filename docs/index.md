@@ -2,7 +2,7 @@
 icon: lucide/rocket
 ---
 
-# pydantic-ai-absurd
+# Pydantic AI Absurd
 
 <p align="center"><em>Durable execution for Pydantic AI agents, on Postgres alone.</em></p>
 
@@ -28,7 +28,7 @@ from pydantic_ai import Agent
 from pydantic_ai_absurd import AbsurdAgent
 
 absurd = AsyncAbsurd("postgresql://localhost/absurd", queue_name="agents")
-agent = AbsurdAgent(Agent("openai:gpt-5.2", name="analyst"), absurd, name="analyst")
+agent = AbsurdAgent(Agent("openai:gpt-5.2", name="analyst"), absurd)
 
 # You write the task; the agent is a durable callable inside it.
 @absurd.register_task(name="analyse")

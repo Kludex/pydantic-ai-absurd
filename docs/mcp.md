@@ -22,7 +22,7 @@ inner = Agent("openai:gpt-5.2", name="helper")
 def add(a: int, b: int) -> int:
     return a + b
 
-agent = AbsurdAgent(inner, absurd, name="helper")  # `add` is untouched
+agent = AbsurdAgent(inner, absurd)  # `add` is untouched
 ```
 
 The `add` tool is **not** wrapped in a checkpoint. When a task replays, `add` runs again like any other plain Python.
@@ -46,7 +46,7 @@ from pydantic_ai_absurd import AbsurdAgent
 toolset = MCPToolset("https://example.com/mcp")
 inner = Agent("openai:gpt-5.2", name="researcher", toolsets=[toolset])
 
-agent = AbsurdAgent(inner, absurd, name="researcher")
+agent = AbsurdAgent(inner, absurd)
 ```
 
 `MCPToolset` is Pydantic AI's unified way to talk to an MCP server — over HTTP, stdio, or an in-process server. You pass it a URL, a script path, or a server instance. When `AbsurdAgent` wraps the agent, it finds that `MCPToolset` and replaces it with a durable `AbsurdMCPToolset` automatically — you don't do anything.
