@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-from collections.abc import AsyncIterable, AsyncIterator
+from collections.abc import AsyncIterable, AsyncIterator, Mapping
 
 import pytest
 from absurd_sdk import AsyncAbsurd, AsyncTaskContext, JsonValue
 from fastmcp import FastMCP
+from pydantic import TypeAdapter
 from pydantic_ai import Agent, ModelMessage, ModelResponse
 from pydantic_ai.exceptions import UserError
 from pydantic_ai.mcp import MCPServerStdio
@@ -20,6 +21,8 @@ from pydantic_ai_absurd import AbsurdAgent, AbsurdFastMCPToolset, AbsurdMCPServe
 from .conftest import running_task_context
 
 pytestmark = pytest.mark.anyio
+
+_history_adapter: TypeAdapter[list[ModelMessage]] = TypeAdapter(list[ModelMessage])
 
 
 def _make_model() -> FunctionModel:
@@ -42,7 +45,6 @@ async def test_model_swapped_with_absurd_model(absurd: AsyncAbsurd) -> None:
     inner = Agent(_make_model(), name='a')
     agent = AbsurdAgent(inner, absurd, name='a')
     assert isinstance(agent.model, AbsurdModel)
-    assert agent.task_name == 'a.run'
 
 
 async def test_function_toolsets_are_not_wrapped(absurd: AsyncAbsurd) -> None:
@@ -185,48 +187,38 @@ async def test_run_rejects_non_absurd_model(absurd: AsyncAbsurd) -> None:
         await agent.run('hi', model=_make_model())
 
 
-async def test_register_task_exposes_run_handler(absurd: AsyncAbsurd) -> None:
-    inner = Agent(_make_model(), name='driver')
-    AbsurdAgent(inner, absurd, name='driver', register_task=True)
+async def test_run_inside_authored_task_is_durable(absurd: AsyncAbsurd) -> None:
+    """The intended pattern: author a task, call `agent.run()` inside it, spawn the task.
 
-    spawned = await absurd.spawn('driver.run', {'prompt': 'hello'})
-    await absurd.work_batch(batch_size=1)
-    result = await absurd.fetch_task_result(spawned['task_id'])
-    assert result is not None
-    assert result.state == 'completed'
-    assert isinstance(result.result, dict)
-    assert result.result['output'] == 'ok'
-
-
-async def test_register_task_is_idempotent(absurd: AsyncAbsurd) -> None:
-    inner = Agent(_make_model(), name='x')
-    agent = AbsurdAgent(inner, absurd, name='x', register_task=True)
-    # Second call should be a no-op, not error.
-    agent._register_task()
-
-
-async def test_register_task_threads_message_history(absurd: AsyncAbsurd) -> None:
+    Threads `message_history` through and checks the run sees the prior conversation.
+    """
     seen: list[list[ModelMessage]] = []
 
     def fn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
         seen.append(list(messages))
         return ModelResponse(parts=[TextPart(content='ok')])
 
-    inner = Agent(FunctionModel(fn, model_name='fn'), name='hist')
-    AbsurdAgent(inner, absurd, name='hist', register_task=True)
+    agent = AbsurdAgent(Agent(FunctionModel(fn, model_name='fn'), name='analyst'), absurd, name='analyst')
+
+    async def analyse(params: Mapping[str, JsonValue] | None, ctx: AsyncTaskContext) -> JsonValue:
+        params = params or {}
+        raw_history = params.get('message_history')
+        history = _history_adapter.validate_python(raw_history) if isinstance(raw_history, list) else None
+        result = await agent.run('continue', message_history=history)
+        return {'output': result.output}
+
+    absurd.register_task(name='analyse')(analyse)  # type: ignore[arg-type]
 
     history = [
         ModelRequest(parts=[UserPromptPart(content='earlier turn')]),
         ModelResponse(parts=[TextPart(content='earlier reply')]),
     ]
-    params: dict[str, JsonValue] = {
-        'prompt': 'continue',
-        'message_history': to_jsonable_python(history),
-    }
-    spawned = await absurd.spawn('hist.run', params)
+    spawned = await absurd.spawn('analyse', {'message_history': to_jsonable_python(history)})
     await absurd.work_batch(batch_size=1)
     result = await absurd.fetch_task_result(spawned['task_id'])
     assert result is not None and result.state == 'completed'
+    assert isinstance(result.result, dict)
+    assert result.result['output'] == 'ok'
 
     # The run saw the prior conversation, not a blank history.
     parts = [p for messages in seen for m in messages for p in m.parts]

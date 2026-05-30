@@ -1,11 +1,10 @@
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
+from collections.abc import AsyncIterator, Iterator, Sequence
 from contextlib import asynccontextmanager, contextmanager
 from typing import TYPE_CHECKING, Any
 
-from absurd_sdk import AsyncAbsurd, AsyncTaskContext, JsonValue
-from pydantic import TypeAdapter
+from absurd_sdk import AsyncAbsurd, JsonValue
 from pydantic_ai import (
     AbstractToolset,
     AgentRunResultEvent,
@@ -37,7 +36,6 @@ from pydantic_ai.tools import (
     ToolFuncEither,
 )
 from pydantic_ai.toolsets.fastmcp import FastMCPToolset
-from pydantic_core import to_jsonable_python
 from typing_extensions import Never
 
 from ._fastmcp_toolset import AbsurdFastMCPToolset
@@ -48,11 +46,14 @@ from ._utils import StepConfig, current_async_context, require_async_context
 if TYPE_CHECKING:
     from pydantic_ai.agent.spec import AgentSpec
 
-_history_adapter: TypeAdapter[list[_messages.ModelMessage]] = TypeAdapter(list[_messages.ModelMessage])
-
 
 class AbsurdAgent(WrapperAgent[AgentDepsT, OutputDataT]):
-    """Wrap a Pydantic AI agent so the whole run is a durable Absurd workflow.
+    """Wrap a Pydantic AI agent so its `run()` is durable when called inside an Absurd task.
+
+    Call `await agent.run(...)` from within an Absurd task handler and every model call and
+    MCP call inside the run is checkpointed via `ctx.step(...)`. A worker crash mid-run
+    re-runs the task, but the checkpointed steps return their cached results - so the run
+    resumes from the last completed step instead of restarting, and no tokens are re-spent.
 
     The wrapped model is replaced with `AbsurdModel`; any `MCPServer` or `FastMCPToolset`
     toolsets are replaced with their Absurd counterparts. Plain function toolsets are
@@ -60,15 +61,14 @@ class AbsurdAgent(WrapperAgent[AgentDepsT, OutputDataT]):
     re-run (the expensive, non-idempotent things live behind LLM calls and MCP calls,
     both of which are checkpointed).
 
-    With `register_task=True`, the entire `run()` is registered as an Absurd task named
-    `<name>.run`. Spawn it (`absurd.spawn('<name>.run', {'prompt': ..., 'message_history': [...]})`)
-    and the run executes durably: each model and MCP call is a checkpoint, so a crash
-    mid-run resumes from the last completed step instead of restarting. This is the
-    Postgres-only analogue of Pydantic AI's Temporal integration - the run is the workflow.
+    You author the task; the agent is a durable callable inside it:
 
-    Leave `register_task=False` (the default) when the agent is a sub-component called by
-    other code (e.g. via `agent.run(...)` inside another task), so constructing it doesn't
-    register a top-level task nobody spawns.
+        agent = AbsurdAgent(Agent('openai:gpt-5.2', name='analyst'), absurd, name='analyst')
+
+        @absurd.register_task(name='analyse')
+        async def analyse(params, ctx):
+            result = await agent.run(params['prompt'])
+            return result.output
     """
 
     _parallel_execution_mode: ParallelExecutionMode
@@ -83,7 +83,6 @@ class AbsurdAgent(WrapperAgent[AgentDepsT, OutputDataT]):
         model_step_config: StepConfig | None = None,
         mcp_step_config: StepConfig | None = None,
         parallel_execution_mode: ParallelExecutionMode = 'sequential',
-        register_task: bool = False,
     ) -> None:
         super().__init__(wrapped)
 
@@ -94,7 +93,7 @@ class AbsurdAgent(WrapperAgent[AgentDepsT, OutputDataT]):
         if self._name is None:
             raise UserError(
                 'An agent needs a unique `name` to be used with Absurd. The name is '
-                'used as the prefix for every step and the registered task name.'
+                'used as the prefix for every checkpoint step.'
             )
 
         self._model_step_config: StepConfig = model_step_config or {}
@@ -113,11 +112,6 @@ class AbsurdAgent(WrapperAgent[AgentDepsT, OutputDataT]):
         self._toolsets: Sequence[AbstractToolset[AgentDepsT]] = [
             toolset.visit_and_replace(self._absurdify_toolset) for toolset in wrapped.toolsets
         ]
-
-        self._task_name = f'{self._name}.run'
-        self._registered = False
-        if register_task:
-            self._register_task()
 
     def _absurdify_toolset(self, toolset: AbstractToolset[AgentDepsT]) -> AbstractToolset[AgentDepsT]:
         if isinstance(toolset, MCPServer):
@@ -139,29 +133,6 @@ class AbsurdAgent(WrapperAgent[AgentDepsT, OutputDataT]):
         assert self._name is not None  # pragma: no cover - enforced in __init__
         return self._name
 
-    def _register_task(self) -> None:
-        if self._registered:
-            return
-        self._registered = True
-
-        agent = self
-
-        async def _handler(params: Mapping[str, JsonValue] | None, ctx: AsyncTaskContext) -> JsonValue:
-            params = params or {}
-            raw_prompt = params.get('prompt')
-            prompt: str | None = raw_prompt if isinstance(raw_prompt, str) else None
-            raw_history = params.get('message_history')
-            history = _history_adapter.validate_python(raw_history) if isinstance(raw_history, list) else None
-            result = await agent.run(prompt, message_history=history)
-            return {
-                'output': to_jsonable_python(result.output),
-                'all_messages': to_jsonable_python(result.all_messages()),
-            }
-
-        # Absurd's register_task decorator is typed for sync handlers only, but the
-        # runtime accepts async handlers too (see AsyncAbsurd._execute_task).
-        self._absurd.register_task(name=self._task_name)(_handler)  # type: ignore[arg-type]
-
     @property
     def name(self) -> str | None:
         return self._name
@@ -169,10 +140,6 @@ class AbsurdAgent(WrapperAgent[AgentDepsT, OutputDataT]):
     @name.setter
     def name(self, value: str | None) -> None:  # pragma: no cover
         raise UserError('The agent name cannot be changed after creation; create a new AbsurdAgent instead.')
-
-    @property
-    def task_name(self) -> str:
-        return self._task_name
 
     @property
     def model(self) -> Model:

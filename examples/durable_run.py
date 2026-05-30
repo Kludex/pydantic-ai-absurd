@@ -50,34 +50,22 @@ async def main() -> None:
             absurd = AsyncAbsurd(conn, queue_name="agents")
             await absurd.create_queue()
 
-            agent = AbsurdAgent(
-                Agent("openai:gpt-5.2", name="analyst"),
-                absurd,
-                name="analyst",
-                register_task=True,
-            )
-            assert agent.task_name == "analyst.run"
+            agent = AbsurdAgent(Agent("openai:gpt-5.2", name="analyst"), absurd, name="analyst")
+
+            # Author the task; call agent.run() inside it. Each model/MCP call is
+            # checkpointed, so a crash mid-run resumes from the last completed step.
+            @absurd.register_task(name="analyse")
+            async def analyse(params, ctx):
+                result = await agent.run(params["prompt"])
+                return {"output": result.output}
 
             spawned = await absurd.spawn(
-                "analyst.run", {"prompt": "In one sentence, what is durable execution?"}
+                "analyse", {"prompt": "In one sentence, what is durable execution?"}
             )
             await absurd.work_batch(batch_size=1)
-            first = await absurd.fetch_task_result(spawned["task_id"])
-            assert first is not None and first.state == "completed"
-            print("first run output:", first.result["output"])
-
-            # Continue the conversation: feed the prior messages back in.
-            followup = await absurd.spawn(
-                "analyst.run",
-                {
-                    "prompt": "Now say it again, but as a haiku.",
-                    "message_history": first.result["all_messages"],
-                },
-            )
-            await absurd.work_batch(batch_size=1)
-            second = await absurd.fetch_task_result(followup["task_id"])
-            assert second is not None and second.state == "completed"
-            print("followup output:", second.result["output"])
+            done = await absurd.fetch_task_result(spawned["task_id"])
+            assert done is not None and done.state == "completed"
+            print("output:", done.result["output"])
 
 
 if __name__ == "__main__":
