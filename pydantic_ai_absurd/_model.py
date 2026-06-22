@@ -1,13 +1,14 @@
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Mapping
 from contextlib import asynccontextmanager
 from typing import Any
 
 from absurd_sdk import JsonValue
 from pydantic import TypeAdapter
-from pydantic_ai import ModelMessage, ModelResponse
+from pydantic_ai import ModelMessage, ModelResponse, models
 from pydantic_ai.agent import EventStreamHandler
+from pydantic_ai.exceptions import UserError
 from pydantic_ai.models import Model, ModelRequestParameters, StreamedResponse
 from pydantic_ai.models.wrapper import CompletedStreamedResponse, WrapperModel
 from pydantic_ai.settings import ModelSettings
@@ -46,18 +47,70 @@ class AbsurdModel(WrapperModel):
         *,
         step_name_prefix: str,
         event_stream_handler: EventStreamHandler[Any] | None = None,
+        models: Mapping[str, Model] | None = None,
+        _model_id: str | None = None,
+        _models_by_id: dict[str, Model] | None = None,
     ) -> None:
         super().__init__(model)
         self._step_name_prefix = step_name_prefix
         self.event_stream_handler = event_stream_handler
+        self._model_id = _model_id
+
+        if _models_by_id is not None:
+            self._models_by_id = _models_by_id
+            return
+
+        self._models_by_id = {'default': model}
+        for model_id, instance in (models or {}).items():
+            if model_id == 'default':
+                raise UserError("Model ID 'default' is reserved for the agent's primary model.")
+            self._models_by_id[model_id] = instance
 
     @property
     def request_step_name(self) -> str:
-        return f'{self._step_name_prefix}__model.request'
+        return self._step_name('request')
 
     @property
     def request_stream_step_name(self) -> str:
-        return f'{self._step_name_prefix}__model.request_stream'
+        return self._step_name('request_stream')
+
+    def _step_name(self, op: str) -> str:
+        suffix = f'.{self._model_id}' if self._model_id is not None else ''
+        return f'{self._step_name_prefix}__model.{op}{suffix}'
+
+    def _get_model_id(self, model: models.Model | models.KnownModelName | str | None) -> str | None:
+        if model in (None, 'default'):
+            return None
+        if isinstance(model, Model):
+            model_id = next((mid for mid, m in self._models_by_id.items() if m is model), None)
+            if model_id is None:
+                raise UserError(
+                    'Arbitrary model instances cannot be used at run time with Absurd; '
+                    'register the model via `models=` or reference a registered model by id.'
+                )
+            return None if model_id == 'default' else model_id
+        if model not in self._models_by_id:
+            raise UserError(
+                f'Model {model!r} is not registered; pass it to `AbsurdAgent(..., models=...)` '
+                'or use a registered model id.'
+            )
+        return model
+
+    def resolve_model(self, model: models.Model | models.KnownModelName | str | None) -> Model:
+        model_id = self._get_model_id(model)
+        return self.wrapped if model_id is None else self._models_by_id[model_id]
+
+    def for_run(self, model: models.Model | models.KnownModelName | str | None) -> AbsurdModel:
+        model_id = self._get_model_id(model)
+        if model_id is None:
+            return self
+        return AbsurdModel(
+            self._models_by_id[model_id],
+            step_name_prefix=self._step_name_prefix,
+            event_stream_handler=self.event_stream_handler,
+            _model_id=model_id,
+            _models_by_id=self._models_by_id,
+        )
 
     async def request(
         self,

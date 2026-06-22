@@ -5,6 +5,7 @@ from collections.abc import AsyncIterable, AsyncIterator
 import pytest
 from absurd_sdk import AsyncAbsurd, AsyncTaskContext, JsonValue
 from pydantic_ai import ModelMessage, ModelResponse
+from pydantic_ai.exceptions import UserError
 from pydantic_ai.messages import AgentStreamEvent, TextPart
 from pydantic_ai.models import ModelRequestParameters, StreamedResponse
 from pydantic_ai.models.function import AgentInfo, FunctionModel
@@ -47,6 +48,39 @@ async def test_request_without_context_calls_model() -> None:
     resp = await model.request([], None, ModelRequestParameters())
     assert isinstance(resp, ModelResponse)
     assert counter['calls'] == 1
+
+
+async def test_reserved_default_model_id_raises() -> None:
+    counter = {'calls': 0}
+    with pytest.raises(UserError, match="'default' is reserved"):
+        AbsurdModel(_make_model(counter), step_name_prefix='agent', models={'default': _make_model(counter)})
+
+
+async def test_for_run_default_returns_self() -> None:
+    counter = {'calls': 0}
+    model = AbsurdModel(_make_model(counter), step_name_prefix='agent', models={'cheap': _make_model(counter)})
+    assert model.for_run(None) is model
+    assert model.for_run('default') is model
+
+
+async def test_for_run_registered_id_scopes_step_name() -> None:
+    counter = {'calls': 0}
+    cheap = _make_model(counter)
+    model = AbsurdModel(_make_model(counter), step_name_prefix='agent', models={'cheap': cheap})
+    bound = model.for_run('cheap')
+    assert bound is not model
+    assert bound.wrapped is cheap
+    assert bound.request_step_name == 'agent__model.request.cheap'
+    assert model.request_step_name == 'agent__model.request'
+
+
+async def test_for_run_unregistered_raises() -> None:
+    counter = {'calls': 0}
+    model = AbsurdModel(_make_model(counter), step_name_prefix='agent')
+    with pytest.raises(UserError, match="Model 'nope' is not registered"):
+        model.for_run('nope')
+    with pytest.raises(UserError, match='Arbitrary model instances cannot be used'):
+        model.for_run(_make_model(counter))
 
 
 async def test_request_stream_without_context_yields_raw_stream() -> None:
