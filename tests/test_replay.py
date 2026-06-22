@@ -60,3 +60,39 @@ async def test_checkpointed_response_survives_crash_and_is_not_reissued(absurd: 
     assert replay_response == first_response
     assert isinstance(replay_response.parts[0], TextPart)
     assert replay_response.parts[0].content == 'call 1'
+
+
+async def test_swapped_model_checkpoint_replays_under_its_id(absurd: AsyncAbsurd) -> None:
+    """A run-time-selected registered model checkpoints under its own id-scoped step name,
+    and that checkpoint is what a replay serves."""
+    counter = {'calls': 0}
+
+    def fn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        counter['calls'] += 1
+        return ModelResponse(parts=[TextPart(content=f'cheap {counter["calls"]}')])
+
+    registry = AbsurdModel(
+        FunctionModel(fn, model_name='primary'),
+        step_name_prefix='swap',
+        models={'cheap': FunctionModel(fn, model_name='cheap')},
+    )
+    model = registry.for_run('cheap')
+    assert model.request_step_name == 'swap__model.request.cheap'
+
+    async def noop(params: JsonValue, ctx: AsyncTaskContext) -> JsonValue:  # pragma: no cover
+        return None
+
+    absurd.register_task(name='swap')(noop)
+
+    spawned_id: str
+    async with running_task_context(absurd, 'swap', max_attempts=2) as ctx:
+        first_response = await model.request([], None, ModelRequestParameters())
+        spawned_id = ctx.task_id
+
+    async with reenter_running_task(absurd, spawned_id):
+        replay_response = await model.request([], None, ModelRequestParameters())
+
+    assert counter['calls'] == 1
+    assert replay_response == first_response
+    assert isinstance(replay_response.parts[0], TextPart)
+    assert replay_response.parts[0].content == 'cheap 1'

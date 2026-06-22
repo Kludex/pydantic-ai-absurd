@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Iterator, Sequence
+from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
 from contextlib import AbstractAsyncContextManager, asynccontextmanager, contextmanager
 from typing import TYPE_CHECKING, Any
 
@@ -62,6 +62,23 @@ class AbsurdAgent(WrapperAgent[AgentDepsT, OutputDataT]):
         async def analyse(params, ctx):
             result = await agent.run(params['prompt'])
             return result.output
+
+    To route between models within a single agent, register them up front and select one
+    per run by id. Only registered models may be used at run time; the id is reserved as
+    `'default'` for the wrapped model and is folded into the checkpoint step name so a
+    replay resolves to the same model:
+
+        agent = AbsurdAgent(
+            Agent('openai:gpt-5.2', name='analyst'),
+            absurd,
+            name='analyst',
+            models={'cheap': OpenAIModel('gpt-5.2-mini')},
+        )
+
+        @absurd.register_task(name='analyse')
+        async def analyse(params, ctx):
+            triage = await agent.run(params['prompt'], model='cheap')
+            ...
     """
 
     _parallel_execution_mode: ParallelExecutionMode
@@ -72,6 +89,7 @@ class AbsurdAgent(WrapperAgent[AgentDepsT, OutputDataT]):
         absurd: AsyncAbsurd,
         *,
         name: str | None = None,
+        models: Mapping[str, Model] | None = None,
         event_stream_handler: EventStreamHandler[AgentDepsT] | None = None,
         parallel_execution_mode: ParallelExecutionMode = 'sequential',
     ) -> None:
@@ -94,6 +112,7 @@ class AbsurdAgent(WrapperAgent[AgentDepsT, OutputDataT]):
             wrapped.model,
             step_name_prefix=self._name,
             event_stream_handler=self.event_stream_handler,
+            models=models,
         )
 
         self._toolsets: Sequence[AbstractToolset[AgentDepsT]] = [
@@ -140,9 +159,9 @@ class AbsurdAgent(WrapperAgent[AgentDepsT, OutputDataT]):
             return super().toolsets
 
     @contextmanager
-    def _absurd_overrides(self) -> Iterator[None]:
+    def _absurd_overrides(self, model: models.Model | models.KnownModelName | str | None = None) -> Iterator[None]:
         with (
-            super().override(model=self._model, toolsets=self._toolsets, tools=[]),
+            super().override(model=self._model.for_run(model), toolsets=self._toolsets, tools=[]),
             self.parallel_tool_call_execution_mode(self._parallel_execution_mode),
         ):
             yield
@@ -169,29 +188,27 @@ class AbsurdAgent(WrapperAgent[AgentDepsT, OutputDataT]):
         capabilities: Sequence[AgentCapability[AgentDepsT]] | None = None,
         spec: dict[str, Any] | AgentSpec | None = None,
     ) -> AgentRunResult[Any]:
-        self._reject_non_absurd_model(model)
         require_async_context()
-        with self._absurd_overrides():
-            return await super().run(
-                user_prompt,
-                output_type=output_type,
-                message_history=message_history,
-                deferred_tool_results=deferred_tool_results,
-                conversation_id=conversation_id,
-                model=model,
-                instructions=instructions,
-                deps=deps,
-                model_settings=model_settings,
-                usage_limits=usage_limits,
-                usage=usage,
-                metadata=metadata,
-                retries=retries,
-                infer_name=infer_name,
-                toolsets=toolsets,
-                event_stream_handler=event_stream_handler,
-                capabilities=capabilities,
-                spec=spec,
-            )
+        return await super().run(
+            user_prompt,
+            output_type=output_type,
+            message_history=message_history,
+            deferred_tool_results=deferred_tool_results,
+            conversation_id=conversation_id,
+            model=model,
+            instructions=instructions,
+            deps=deps,
+            model_settings=model_settings,
+            usage_limits=usage_limits,
+            usage=usage,
+            metadata=metadata,
+            retries=retries,
+            infer_name=infer_name,
+            toolsets=toolsets,
+            event_stream_handler=event_stream_handler,
+            capabilities=capabilities,
+            spec=spec,
+        )
 
     def run_sync(
         self,
@@ -242,31 +259,49 @@ class AbsurdAgent(WrapperAgent[AgentDepsT, OutputDataT]):
         capabilities: Sequence[AgentCapability[AgentDepsT]] | None = None,
         spec: dict[str, Any] | AgentSpec | None = None,
     ) -> AsyncIterator[AgentRun[AgentDepsT, Any]]:
-        self._reject_non_absurd_model(model)
-        kwargs: dict[str, Any] = dict(
-            output_type=output_type,
-            message_history=message_history,
-            deferred_tool_results=deferred_tool_results,
-            conversation_id=conversation_id,
-            model=model,
-            instructions=instructions,
-            deps=deps,
-            model_settings=model_settings,
-            usage_limits=usage_limits,
-            usage=usage,
-            metadata=metadata,
-            retries=retries,
-            infer_name=infer_name,
-            toolsets=toolsets,
-            capabilities=capabilities,
-            spec=spec,
-        )
         if current_async_context() is None:
-            async with super().iter(user_prompt, **kwargs) as run:
+            resolved = self._model.resolve_model(model)
+            async with super().iter(
+                user_prompt,
+                output_type=output_type,
+                message_history=message_history,
+                deferred_tool_results=deferred_tool_results,
+                conversation_id=conversation_id,
+                model=resolved,
+                instructions=instructions,
+                deps=deps,
+                model_settings=model_settings,
+                usage_limits=usage_limits,
+                usage=usage,
+                metadata=metadata,
+                retries=retries,
+                infer_name=infer_name,
+                toolsets=toolsets,
+                capabilities=capabilities,
+                spec=spec,
+            ) as run:
                 yield run
                 return
-        with self._absurd_overrides():
-            async with super().iter(user_prompt, **kwargs) as run:
+        with self._absurd_overrides(model):
+            async with super().iter(
+                user_prompt,
+                output_type=output_type,
+                message_history=message_history,
+                deferred_tool_results=deferred_tool_results,
+                conversation_id=conversation_id,
+                model=None,
+                instructions=instructions,
+                deps=deps,
+                model_settings=model_settings,
+                usage_limits=usage_limits,
+                usage=usage,
+                metadata=metadata,
+                retries=retries,
+                infer_name=infer_name,
+                toolsets=toolsets,
+                capabilities=capabilities,
+                spec=spec,
+            ) as run:
                 yield run
 
     def run_stream_events(
@@ -329,7 +364,7 @@ class AbsurdAgent(WrapperAgent[AgentDepsT, OutputDataT]):
             message_history=message_history,
             deferred_tool_results=deferred_tool_results,
             conversation_id=conversation_id,
-            model=model,
+            model=self._model.resolve_model(model),
             instructions=instructions,
             deps=deps,
             model_settings=model_settings,
@@ -344,11 +379,6 @@ class AbsurdAgent(WrapperAgent[AgentDepsT, OutputDataT]):
             spec=spec,
         ) as result:
             yield result
-
-    @staticmethod
-    def _reject_non_absurd_model(model: object) -> None:
-        if model is not None and not isinstance(model, AbsurdModel):
-            raise UserError('Non-Absurd model cannot be overridden at run time; set `model` at agent construction.')
 
     @contextmanager
     def override(

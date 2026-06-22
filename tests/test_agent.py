@@ -80,10 +80,10 @@ async def test_in_process_mcp_toolsets_are_wrapped(absurd: AsyncAbsurd) -> None:
     assert any(isinstance(t, AbsurdMCPToolset) for t in agent.toolsets)
 
 
-async def test_iter_rejects_non_absurd_model(absurd: AsyncAbsurd) -> None:
+async def test_iter_rejects_unregistered_model(absurd: AsyncAbsurd) -> None:
     inner = Agent(_make_model(), name='a')
     agent = AbsurdAgent(inner, absurd, name='a')
-    with pytest.raises(UserError, match='Non-Absurd model cannot be overridden'):
+    with pytest.raises(UserError, match='Arbitrary model instances cannot be used'):
         async with agent.iter('hi', model=_make_model()):
             pass  # pragma: no cover
 
@@ -178,11 +178,70 @@ async def test_override_accepts_absurd_model(absurd: AsyncAbsurd) -> None:
         assert agent.model is not replacement  # _absurd_overrides still active in run path
 
 
-async def test_run_rejects_non_absurd_model(absurd: AsyncAbsurd) -> None:
+async def test_run_rejects_unregistered_model_instance(absurd: AsyncAbsurd) -> None:
     inner = Agent(_make_model(), name='a')
     agent = AbsurdAgent(inner, absurd, name='a')
-    with pytest.raises(UserError, match='Non-Absurd model cannot be overridden'):
-        await agent.run('hi', model=_make_model())
+
+    async def noop(params: JsonValue, ctx: AsyncTaskContext) -> JsonValue:  # pragma: no cover
+        return None
+
+    absurd.register_task(name='noop')(noop)
+
+    async with running_task_context(absurd, 'noop'):
+        with pytest.raises(UserError, match='Arbitrary model instances cannot be used'):
+            await agent.run('hi', model=_make_model())
+
+
+async def test_run_rejects_unregistered_model_id(absurd: AsyncAbsurd) -> None:
+    inner = Agent(_make_model(), name='a')
+    agent = AbsurdAgent(inner, absurd, name='a')
+
+    async def noop(params: JsonValue, ctx: AsyncTaskContext) -> JsonValue:  # pragma: no cover
+        return None
+
+    absurd.register_task(name='noop')(noop)
+
+    async with running_task_context(absurd, 'noop'):
+        with pytest.raises(UserError, match="Model 'cheap' is not registered"):
+            await agent.run('hi', model='cheap')
+
+
+async def test_run_uses_registered_model(absurd: AsyncAbsurd) -> None:
+    primary_calls = 0
+    cheap_calls = 0
+
+    def primary_fn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        nonlocal primary_calls
+        primary_calls += 1
+        return ModelResponse(parts=[TextPart(content='primary')])
+
+    def cheap_fn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        nonlocal cheap_calls
+        cheap_calls += 1
+        return ModelResponse(parts=[TextPart(content='cheap')])
+
+    inner = Agent(FunctionModel(primary_fn, model_name='primary'), name='a')
+    agent = AbsurdAgent(inner, absurd, name='a', models={'cheap': FunctionModel(cheap_fn, model_name='cheap')})
+
+    async def noop(params: JsonValue, ctx: AsyncTaskContext) -> JsonValue:  # pragma: no cover
+        return None
+
+    absurd.register_task(name='noop')(noop)
+
+    async with running_task_context(absurd, 'noop'):
+        default_result = await agent.run('hi')
+        cheap_result = await agent.run('hi', model='cheap')
+
+    assert default_result.output == 'primary'
+    assert cheap_result.output == 'cheap'
+    assert primary_calls == 1
+    assert cheap_calls == 1
+
+
+async def test_reserved_default_model_id_raises(absurd: AsyncAbsurd) -> None:
+    inner = Agent(_make_model(), name='a')
+    with pytest.raises(UserError, match="'default' is reserved"):
+        AbsurdAgent(inner, absurd, name='a', models={'default': _make_model()})
 
 
 async def test_run_inside_authored_task_is_durable(absurd: AsyncAbsurd) -> None:
