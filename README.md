@@ -21,10 +21,10 @@ import asyncio
 
 from absurd_sdk import AsyncAbsurd
 from pydantic_ai import Agent
-from pydantic_ai_absurd import AbsurdAgent
+from pydantic_ai_absurd import AbsurdDurability
 
 absurd = AsyncAbsurd("postgresql://localhost/absurd", queue_name="agents")
-agent = AbsurdAgent(Agent("openai:gpt-5.2", name="analyst"), absurd)
+agent = Agent("openai:gpt-5.2", name="analyst", capabilities=[AbsurdDurability()])
 
 
 @absurd.register_task(name="analyse")

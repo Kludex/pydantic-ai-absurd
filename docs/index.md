@@ -27,10 +27,10 @@ import asyncio
 
 from absurd_sdk import AsyncAbsurd
 from pydantic_ai import Agent
-from pydantic_ai_absurd import AbsurdAgent
+from pydantic_ai_absurd import AbsurdDurability
 
 absurd = AsyncAbsurd("postgresql://localhost/absurd", queue_name="agents")
-agent = AbsurdAgent(Agent("openai:gpt-5.2", name="analyst"), absurd)
+agent = Agent("openai:gpt-5.2", name="analyst", capabilities=[AbsurdDurability()])
 
 
 # You write the task; the agent is a durable callable inside it.
@@ -67,7 +67,7 @@ flowchart LR
     Client[Your app] -->|spawn| DB[(Postgres)]
     Worker[Worker] -->|claim| DB
     Worker -->|runs| Task["@register_task"]
-    Task -->|agent.run| Run[AbsurdAgent]
+    Task -->|agent.run| Run[Agent + AbsurdDurability]
     Run -->|checkpoint each step| DB
     Run -->|model / MCP call| LLM[LLM and tools]
 ```
@@ -92,7 +92,7 @@ The task lives in Postgres, so the side that *asks* for work and the side that *
 
 -   :material-vector-combine: __It's just Pydantic AI__
 
-    `AbsurdAgent` wraps a normal `Agent`. Your tools, your output types, your model, all the same.
+    `AbsurdDurability` is a normal agent [capability](https://ai.pydantic.dev/capabilities/). Your tools, your output types, your model, all the same - and outside a task the agent behaves like a regular agent.
 
 </div>
 
@@ -129,6 +129,21 @@ You want pydantic-ai-absurd when a *single run* is long enough, expensive enough
     The setup errors you'll hit on the first run, and exactly how to fix each one.
 
 </div>
+
+## Migrating from `AbsurdAgent`
+
+Earlier releases wrapped the agent in an `AbsurdAgent`. That wrapper is deprecated in favor of the capability - the port is a one-liner:
+
+```diff
+-from pydantic_ai_absurd import AbsurdAgent
+-agent = AbsurdAgent(Agent("openai:gpt-5.2", name="analyst"), absurd)
++from pydantic_ai_absurd import AbsurdDurability
++agent = Agent("openai:gpt-5.2", name="analyst", capabilities=[AbsurdDurability()])
+```
+
+Arguments map directly: `name=`, `models=`, `event_stream_handler=`, and `parallel_execution_mode=` move to `AbsurdDurability(...)`; the `absurd` client argument disappears (the task context is discovered automatically). Checkpoint step names are identical, so runs started under the wrapper replay correctly after switching.
+
+Two behaviors change: `agent.run()` *outside* a task is now a plain, non-durable run instead of an error, and streaming (`run_stream`, `run_stream_events`, `iter`) works inside a task - the model's stream is consumed inside the checkpointed step and replayed to your code.
 
 ## Install
 

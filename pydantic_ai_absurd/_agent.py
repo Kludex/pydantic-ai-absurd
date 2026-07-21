@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import warnings
 from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
 from contextlib import AbstractAsyncContextManager, asynccontextmanager, contextmanager
 from typing import TYPE_CHECKING, Any
@@ -43,6 +44,9 @@ if TYPE_CHECKING:
 
 class AbsurdAgent(WrapperAgent[AgentDepsT, OutputDataT]):
     """Wrap a Pydantic AI agent so its `run()` is durable when called inside an Absurd task.
+
+    Deprecated: attach an [`AbsurdDurability`][pydantic_ai_absurd.AbsurdDurability] capability
+    via `Agent(..., capabilities=[AbsurdDurability()])` instead.
 
     Call `await agent.run(...)` from within an Absurd task handler and every model call,
     MCP call, and function tool call inside the run is checkpointed via `ctx.step(...)`. A
@@ -93,6 +97,14 @@ class AbsurdAgent(WrapperAgent[AgentDepsT, OutputDataT]):
         event_stream_handler: EventStreamHandler[AgentDepsT] | None = None,
         parallel_execution_mode: ParallelExecutionMode = 'sequential',
     ) -> None:
+        warnings.warn(
+            '`AbsurdAgent` is deprecated; attach an `AbsurdDurability` capability to the agent instead: '
+            '`Agent(..., capabilities=[AbsurdDurability()])`. Arguments map directly - `name=`, `models=`, '
+            '`event_stream_handler=`, and `parallel_execution_mode=` move to `AbsurdDurability(...)` - and '
+            'the `absurd` client argument is no longer needed (the task context is discovered automatically).',
+            DeprecationWarning,
+            stacklevel=2,
+        )
         super().__init__(wrapped)
 
         self._absurd = absurd

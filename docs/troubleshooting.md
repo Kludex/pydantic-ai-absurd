@@ -56,32 +56,30 @@ psql "postgresql://localhost/absurd" -f tests/fixtures/absurd.sql
 
 A symptom of the same problem is an error mentioning `absurd.spawn_task` or `absurd.create_queue` not existing: those are the schema's functions, and they're missing because the schema is.
 
-### `AbsurdAgent.run() must be called from inside an Absurd task handler`
+### The run worked, but nothing was checkpointed
 
-You called `await agent.run(...)` directly, not inside a task. The durability comes from running *inside* a task, where Absurd can checkpoint each step, so that's the only place it's allowed.
+You called `await agent.run(...)` directly, not inside a task. Outside a task the capability is transparent: the run completes like a normal agent run, with no durability. That's handy for tests and local experiments, but the checkpoints only happen *inside* a task, where Absurd can record each step.
 
 Wrap it:
 
 ```python
 @absurd.register_task(name="analyse")
 async def analyse(params, ctx):
-    result = await agent.run(params["prompt"])  # inside a task: works
+    result = await agent.run(params["prompt"])  # inside a task: durable
     return {"output": result.output}
 ```
-
-If you just want a plain, non-durable run for a quick test, use a normal Pydantic AI `Agent` instead of `AbsurdAgent`.
 
 ### `Unknown task` (the worker fails the task)
 
 A worker claimed a task whose name it doesn't recognize. The fix is almost always: **register the task in the process that runs the worker.** `@register_task` has to execute in the worker process before `work_batch` or `start_worker`. The process that only *spawns* doesn't register anything, it just writes a name and params to the database, but the worker must know that name.
 
-### `An agent needs a unique name to be used with Absurd`
+### `An agent needs to have a unique name in order to be used with Absurd`
 
-The wrapped agent has no name, and Absurd uses the name as the prefix for every checkpoint. Give the inner agent a name (`Agent("openai:gpt-5.2", name="analyst")`) or pass one to `AbsurdAgent(inner, absurd, name="analyst")`.
+The agent has no name, and Absurd uses the name as the prefix for every checkpoint. Give the agent a name (`Agent("openai:gpt-5.2", name="analyst")`) or pass one to the capability: `AbsurdDurability(name="analyst")`.
 
-### `Non-Absurd model cannot be overridden at run time`
+### `... cannot be passed to run(toolsets=...) at runtime with Absurd`
 
-You passed `model=...` to `agent.run(...)` (or `agent.override(...)`). The wrapped model *is* the durable model, so it's fixed when you build the `AbsurdAgent`. Set it at construction and don't override it per run.
+You passed a `FunctionToolset`, `MCPToolset`, or `DynamicToolset` to `agent.run(toolsets=...)` inside a task. Executing toolsets are wrapped for checkpointing when the capability binds to the agent, so they have to be there at construction time. Move the toolset to the `Agent(...)` constructor; non-executing toolsets like `ExternalToolset` can stay per-run.
 
 ## "It runs, but the script never exits"
 
