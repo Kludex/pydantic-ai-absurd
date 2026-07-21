@@ -79,7 +79,7 @@ The agent has no name, and Absurd uses the name as the prefix for every checkpoi
 
 ### `... cannot be passed to run(toolsets=...) at runtime with Absurd`
 
-You passed a `FunctionToolset`, `MCPToolset`, or `DynamicToolset` to `agent.run(toolsets=...)` inside a task. Executing toolsets are wrapped for checkpointing when the capability binds to the agent, so they have to be there at construction time. Move the toolset to the `Agent(...)` constructor; non-executing toolsets like `ExternalToolset` can stay per-run.
+You passed a `FunctionToolset`, `MCPToolset`, or `DynamicToolset` to `agent.run(toolsets=...)` - or through `agent.override(toolsets=...)` / `agent.override(tools=...)` - inside a task. Executing toolsets are wrapped for checkpointing when the capability binds to the agent, so they have to be there at construction time. Move the toolset to the `Agent(...)` constructor; non-executing toolsets like `ExternalToolset` can stay per-run.
 
 ## "It runs, but the script never exits"
 

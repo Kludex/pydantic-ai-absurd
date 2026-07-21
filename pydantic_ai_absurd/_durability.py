@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any, ClassVar
+from typing import Any, ClassVar, Literal, cast
 
 from absurd_sdk import JsonValue
 from pydantic import TypeAdapter
@@ -11,8 +11,9 @@ from pydantic_ai.agent import EventStreamHandler, ParallelExecutionMode
 from pydantic_ai.agent.abstract import AbstractAgent
 from pydantic_ai.capabilities.abstract import WrapModelRequestHandler, WrapRunHandler
 from pydantic_ai.durable_exec._base import BaseDurabilityCapability
-from pydantic_ai.durable_exec._runtime_toolsets import RuntimeToolsetKind
+from pydantic_ai.durable_exec._runtime_toolsets import RuntimeToolsetKind, reject_unsupported_runtime_toolsets
 from pydantic_ai.durable_exec._utils import DurableModel, StreamedActivityResult, capture_event_stream
+from pydantic_ai.exceptions import UserError
 from pydantic_ai.mcp import MCPToolset
 from pydantic_ai.messages import AgentStreamEvent, ModelResponse, ModelResponseStreamEvent
 from pydantic_ai.models import CompletedStreamedResponse, Model, ModelRequestContext
@@ -26,6 +27,11 @@ from ._model import _deserialize, _serialize
 from ._utils import current_async_context
 
 _events_adapter: TypeAdapter[list[ModelResponseStreamEvent]] = TypeAdapter(list[ModelResponseStreamEvent])
+
+AbsurdParallelExecutionMode = Literal['sequential', 'parallel_ordered_events']
+"""Tool-call execution modes usable with Absurd. A subset of `ParallelExecutionMode`: `'parallel'`
+is excluded because Absurd disambiguates repeated step names with an encounter-order counter, so
+checkpoints must be reached in a deterministic order for a replay to line up with them."""
 
 
 @dataclass(init=False)
@@ -71,7 +77,7 @@ class AbsurdDurability(BaseDurabilityCapability[AgentDepsT]):
         models: Mapping[str, Model] | None = None,
         event_stream_handler: EventStreamHandler[AgentDepsT] | None = None,
         name: str | None = None,
-        parallel_execution_mode: ParallelExecutionMode = 'sequential',
+        parallel_execution_mode: AbsurdParallelExecutionMode = 'sequential',
     ) -> None:
         """Create an AbsurdDurability capability.
 
@@ -88,21 +94,53 @@ class AbsurdDurability(BaseDurabilityCapability[AgentDepsT]):
             name: Unique agent name used as the prefix for every checkpoint step. Defaults
                 to the agent's `name` when the capability is bound.
             parallel_execution_mode: Tool-call execution mode applied for the duration of
-                every run. Defaults to `'sequential'`: Absurd disambiguates repeated step
-                names with a counter, so steps must be reached in a deterministic order
-                for a replay to line up with its checkpoints.
+                every run. Defaults to `'sequential'`. `'parallel'` is excluded by type:
+                Absurd disambiguates repeated step names with a counter, so steps must be
+                reached in a deterministic order for a replay to line up with its
+                checkpoints.
         """
         super().__init__(models=models, event_stream_handler=event_stream_handler, name=name)
-        self._parallel_execution_mode = parallel_execution_mode
+        self._parallel_execution_mode = cast(ParallelExecutionMode, parallel_execution_mode)
+        self._wrappers_by_leaf: dict[int, WrapperToolset[AgentDepsT]] = {}
+        self._construction_leaves: set[int] = set()
+        self._default_model_id: str | None = None
 
     @property
     def in_durable_context(self) -> bool:
         return current_async_context() is not None
 
     def _bind_to_agent(self, agent: AbstractAgent[AgentDepsT, Any]) -> None:
-        # Absurd steps are ad-hoc `ctx.step(...)` calls, so unlike Temporal there is
-        # nothing to register up front beyond the durable toolset wrappers.
-        self._register_toolsets(agent)
+        # Absurd steps are ad-hoc `ctx.step(...)` calls, so unlike Temporal there is nothing
+        # to register up front beyond the durable toolset wrappers. Wrappers are keyed by leaf
+        # *instance* rather than toolset `id`: it keeps id-less toolsets working (with the same
+        # step names the deprecated wrapper used), and it stops a runtime toolset that happens
+        # to share an `id` with a construction-time one (e.g. `override(tools=...)` recreating
+        # the agent's own toolset) from being silently swapped for the registered wrapper.
+        self._default_model_id = agent.model if isinstance(agent.model, str) else None
+        self._wrappers_by_leaf = {}
+        self._construction_leaves = set()
+        seen_ids: dict[str, AbstractToolset[AgentDepsT]] = {}
+
+        def register(ts: AbstractToolset[AgentDepsT]) -> AbstractToolset[AgentDepsT]:
+            ts_id = ts.id
+            if ts_id is not None:
+                existing = seen_ids.get(ts_id)
+                if existing is not None and existing is not ts:
+                    raise UserError(
+                        f'Two toolsets have the same `id` {ts_id!r}. Toolset `id`s must be unique among all '
+                        f"toolsets registered with the same agent, as they identify the toolset's steps "
+                        'within the task.'
+                    )
+                seen_ids[ts_id] = ts
+            if id(ts) not in self._construction_leaves:
+                self._construction_leaves.add(id(ts))
+                wrapper = self._wrap_leaf_toolset(ts)
+                if wrapper is not None:
+                    self._wrappers_by_leaf[id(ts)] = wrapper
+            return ts
+
+        for toolset in agent.toolsets:
+            toolset.visit_and_replace(register)
 
     def _wrap_leaf_toolset(self, ts: AbstractToolset[AgentDepsT]) -> WrapperToolset[AgentDepsT] | None:
         if isinstance(ts, MCPToolset):
@@ -110,6 +148,33 @@ class AbsurdDurability(BaseDurabilityCapability[AgentDepsT]):
         if isinstance(ts, FunctionToolset):
             return AbsurdFunctionToolset(wrapped=ts, step_name_prefix=self.name)
         return None
+
+    def get_wrapper_toolset(self, toolset: AbstractToolset[AgentDepsT]) -> AbstractToolset[AgentDepsT] | None:
+        """Swap construction-time leaves for their durable wrappers, rejecting runtime additions.
+
+        A leaf that wasn't seen at binding time - added per-run via `run(toolsets=...)`, an
+        `override(...)`, or another capability - has no durable wrapper, so executing it inside
+        a task would bypass checkpointing and re-run its side effects on recovery. Outside a
+        task everything passes through and the agent behaves like a regular agent.
+        """
+        if self.in_durable_context:
+            runtime_leaves: list[AbstractToolset[AgentDepsT]] = []
+
+            def collect(leaf: AbstractToolset[AgentDepsT]) -> None:
+                if id(leaf) not in self._construction_leaves:
+                    runtime_leaves.append(leaf)
+
+            toolset.apply(collect)
+            reject_unsupported_runtime_toolsets(
+                runtime_leaves,
+                unsupported_kinds=self._unsupported_runtime_toolset_kinds,
+                engine=self.engine_name,
+            )
+
+        def swap(ts: AbstractToolset[AgentDepsT]) -> AbstractToolset[AgentDepsT]:
+            return self._wrappers_by_leaf.get(id(ts), ts)
+
+        return toolset.visit_and_replace(swap)
 
     async def _dispatch_event_stream_event(self, ctx: RunContext[AgentDepsT], event: AgentStreamEvent) -> None:
         task_ctx = current_async_context()
@@ -153,6 +218,11 @@ class AbsurdDurability(BaseDurabilityCapability[AgentDepsT]):
         # to the model it was recorded for (and stays compatible with the deprecated
         # `AbsurdAgent` step names).
         model_id = self._model_id_for_request(ctx, request_context)
+        if model_id is not None and model_id == self._default_model_id:
+            # A string default stays raw through binding, so its requests carry the string
+            # as provenance - but it's still the agent's default model, and the wrapper
+            # (which resolved the default eagerly) checkpointed it without a suffix.
+            model_id = None
         step_suffix = '' if model_id is None else f'.{model_id}'
         model = request_context.model
 
