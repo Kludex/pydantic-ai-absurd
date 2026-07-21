@@ -12,7 +12,7 @@ It's worth understanding this. Not because it's complicated, it isn't, but becau
 
 Absurd's core primitive is the **step**. A step is a piece of work that runs once and whose result is recorded in Postgres. When a task re-runs after a crash, any step that already completed doesn't run again, it returns its stored result.
 
-You don't usually call steps yourself. `AbsurdAgent` does it for you, around every call the agent makes during a run:
+You don't usually call steps yourself. `AbsurdDurability` does it for you, around every call the agent makes during a run:
 
 - **Every model request.** Each call to the LLM is wrapped in a step. The `ModelResponse` is serialized to Postgres.
 - **Every MCP tool call.** Each call to an MCP server is a step too.

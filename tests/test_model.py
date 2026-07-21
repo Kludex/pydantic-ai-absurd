@@ -7,9 +7,8 @@ from absurd_sdk import AsyncAbsurd, AsyncTaskContext, JsonValue
 from pydantic_ai import ModelMessage, ModelResponse
 from pydantic_ai.exceptions import UserError
 from pydantic_ai.messages import AgentStreamEvent, TextPart
-from pydantic_ai.models import ModelRequestParameters, StreamedResponse
+from pydantic_ai.models import CompletedStreamedResponse, ModelRequestParameters, StreamedResponse
 from pydantic_ai.models.function import AgentInfo, FunctionModel
-from pydantic_ai.models.wrapper import CompletedStreamedResponse
 from pydantic_ai.tools import RunContext
 from pydantic_ai.usage import RunUsage
 

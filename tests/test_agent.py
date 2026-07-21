@@ -19,7 +19,10 @@ from pydantic_ai_absurd import AbsurdAgent, AbsurdFunctionToolset, AbsurdMCPTool
 
 from .conftest import running_task_context
 
-pytestmark = pytest.mark.anyio
+pytestmark = [
+    pytest.mark.anyio,
+    pytest.mark.filterwarnings('ignore:`AbsurdAgent` is deprecated:DeprecationWarning'),
+]
 
 _history_adapter: TypeAdapter[list[ModelMessage]] = TypeAdapter(list[ModelMessage])
 
@@ -32,6 +35,12 @@ def _make_model() -> FunctionModel:
         yield 'ok'
 
     return FunctionModel(fn, stream_function=stream_fn, model_name='fn')
+
+
+async def test_absurd_agent_is_deprecated(absurd: AsyncAbsurd) -> None:
+    inner = Agent(_make_model(), name='a')
+    with pytest.warns(DeprecationWarning, match='`AbsurdAgent` is deprecated'):
+        AbsurdAgent(inner, absurd, name='a')
 
 
 async def test_requires_name(absurd: AsyncAbsurd) -> None:

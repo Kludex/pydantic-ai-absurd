@@ -9,8 +9,8 @@ from pydantic import TypeAdapter
 from pydantic_ai import ModelMessage, ModelResponse, models
 from pydantic_ai.agent import EventStreamHandler
 from pydantic_ai.exceptions import UserError
-from pydantic_ai.models import Model, ModelRequestParameters, StreamedResponse
-from pydantic_ai.models.wrapper import CompletedStreamedResponse, WrapperModel
+from pydantic_ai.models import CompletedStreamedResponse, Model, ModelRequestParameters, StreamedResponse
+from pydantic_ai.models.wrapper import WrapperModel
 from pydantic_ai.settings import ModelSettings
 from pydantic_ai.tools import RunContext
 
@@ -165,4 +165,4 @@ class AbsurdModel(WrapperModel):
             return _serialize(streamed.get())
 
         payload = await ctx.step(self.request_stream_step_name, _inner)
-        yield CompletedStreamedResponse(model_request_parameters, _deserialize(payload))
+        yield CompletedStreamedResponse(_deserialize(payload), model_request_parameters=model_request_parameters)

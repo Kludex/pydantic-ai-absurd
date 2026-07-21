@@ -41,7 +41,7 @@ flowchart LR
     ```python
     # Registers the tasks and runs them.
     absurd = AsyncAbsurd(DATABASE_URL, queue_name="agents")
-    agent = AbsurdAgent(Agent("openai:gpt-5.2", name="analyst"), absurd)
+    agent = Agent("openai:gpt-5.2", name="analyst", capabilities=[AbsurdDurability()])
 
     @absurd.register_task(name="analyse")
     async def analyse(params, ctx):
@@ -87,42 +87,37 @@ Your app stores `all_messages` between turns (in your own table, a cache, wherev
 !!! tip "pydantic-ai-absurd makes a run durable, not a conversation"
     Keeping the transcript is your application's job, and it's a small one. The library's promise is narrower and stronger: any single run, however long, resumes after a crash.
 
+## Switching models per run
+
+The agent needs a `model` at construction time (durability has nothing to bind to otherwise), but you can still route between models within a single agent. Register the alternatives on the capability and select one per run by id:
+
+```python
+agent = Agent(
+    "openai:gpt-5.2",
+    name="analyst",
+    capabilities=[AbsurdDurability(models={"cheap": cheap_model})],
+)
+
+@absurd.register_task(name="analyse")
+async def analyse(params, ctx):
+    triage = await agent.run(params["prompt"], model="cheap")
+    ...
+```
+
+The model id is folded into the checkpoint step name, so a replay resolves each cached response to the model that produced it. Plain model-name strings (`model="openai:gpt-4o"`) work too; registering via `models=` matters when the instance carries configuration a name alone wouldn't rebuild, and it keeps the checkpoint names stable and readable.
+
 ## Gotchas
 
-A few things `AbsurdAgent` deliberately refuses to do, each with a clear error so you're never left guessing.
-
-!!! danger "Set the model at construction, not per run"
-    The wrapped model *is* the durable model. You can't swap in a different model at call time:
-
-    ```python
-    await agent.run("hi", model="openai:gpt-4o")
-    # UserError: Non-Absurd model cannot be overridden at run time;
-    #            set `model` at agent construction.
-    ```
-
-    Pick the model when you build the `AbsurdAgent`. (And the inner agent needs a model set at construction too, durability has nothing to infer from otherwise.)
+A few things to know, each with a clear error (or a clear behavior) so you're never left guessing.
 
 !!! danger "No `run_sync` inside a task"
-    Absurd tasks are async. `run_sync` would block the worker's event loop, so it's disabled:
+    Absurd tasks are async, so there's no room for a blocking call on the worker's event loop. Always `await agent.run(...)` inside a task.
 
-    ```python
-    agent.run_sync("hi")
-    # UserError: AbsurdAgent.run_sync() is not supported: the Absurd task
-    #            handler is already async. Use `await agent.run(...)`.
-    ```
+!!! danger "Toolsets are fixed at construction"
+    Function and MCP toolsets must be on the agent when `AbsurdDurability` binds to it - that's when they're wrapped for checkpointing. Passing one to `agent.run(toolsets=...)` inside a task is rejected with a `UserError` (non-executing toolsets like `ExternalToolset` are fine).
 
-    Always `await agent.run(...)`.
-
-!!! danger "Streaming doesn't mix with a durable task"
-    `run_stream` and `run_stream_events` stream tokens to a caller in real time, which has no meaning inside a task whose whole point is to run unattended and be replayable. They're refused inside a task:
-
-    ```python
-    # inside a task:
-    async with agent.run_stream("hi"):  # UserError
-        ...
-    ```
-
-    If you want to stream to a user, do that in your web layer with a normal Pydantic AI agent. Use `AbsurdAgent` for the durable, unattended work.
+!!! note "Streaming inside a task is a replay, not a live wire"
+    `run_stream`, `run_stream_events`, and `iter` work inside a task: the model's stream is consumed inside the checkpointed step, then replayed to your code. That keeps the run replayable, but it means tokens don't cross the wire live - to react to events as they happen, set an `event_stream_handler` on `AbsurdDurability`; it runs inside the step, on the live stream. If you want to stream tokens to a user in real time, do that in your web layer with a run outside a task.
 
 ## You're ready
 
@@ -132,6 +127,6 @@ That's production. To recap the shape:
 - [x] Register tasks in the worker
 - [x] Scale by running more workers; tasks wait safely in Postgres
 - [x] Carry conversations by threading `message_history` through your params
-- [x] Set the model at construction; keep streaming in the web layer
+- [x] Register alternate models on the capability; stream live only outside a task
 
 If something here didn't click, the **[How durability works](durability.md)** page has the underlying model, and the **[Tutorial](tutorial.md)** walks the happy path end to end.

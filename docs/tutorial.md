@@ -25,24 +25,23 @@ psql "postgresql://localhost/absurd" -f tests/fixtures/absurd.sql
 
 The queue is created in code with `await absurd.create_queue()`, which you'll see in the full script in Step 4. If your first run greets you with `schema "absurd" does not exist` or `database "..." does not exist`, the [Troubleshooting](troubleshooting.md) page has the fix.
 
-## Step 1: Wrap your agent
+## Step 1: Attach the capability
 
-Start with an ordinary Pydantic AI agent. Then wrap it.
+Start with an ordinary Pydantic AI agent. Then give it the `AbsurdDurability` capability.
 
-```python hl_lines="4 5"
+```python hl_lines="2 4"
 from pydantic_ai import Agent
-from pydantic_ai_absurd import AbsurdAgent
+from pydantic_ai_absurd import AbsurdDurability
 
-inner = Agent("openai:gpt-5.2", name="analyst")
-agent = AbsurdAgent(inner, absurd)
+agent = Agent("openai:gpt-5.2", name="analyst", capabilities=[AbsurdDurability()])
 ```
 
-That's the only change to your agent. `AbsurdAgent` keeps everything about `inner`, its model, its tools, its output type, but swaps the model (and any MCP tools) for versions that checkpoint each call.
+That's the only change to your agent. The capability discovers the agent's model, name, and toolsets automatically, and routes every model call (and any MCP or function tool call) through a checkpoint when the run happens inside an Absurd task.
 
 !!! warning "The agent needs a name"
-    The `name` isn't decoration, Absurd uses it as the prefix for every checkpoint step, so two agents with durable steps need two distinct names. Here it comes from the inner `Agent(..., name="analyst")`, and `AbsurdAgent` reuses it. If your inner agent has no name, pass one to `AbsurdAgent` directly: `AbsurdAgent(inner, absurd, name="analyst")`. Either way, if there's no name at all you'll get a clear error.
+    The `name` isn't decoration, Absurd uses it as the prefix for every checkpoint step, so two agents with durable steps need two distinct names. Here it comes from `Agent(..., name="analyst")`. If you'd rather not name the agent, pass one to the capability directly: `AbsurdDurability(name="analyst")`. Either way, if there's no name at all you'll get a clear error.
 
-On its own, the wrapped agent does nothing special yet. The magic only happens when you call it *inside a task*. That's the next step.
+On its own, the capability does nothing special yet - outside a task the agent behaves like a regular agent. The magic only happens when you call it *inside a task*. That's the next step.
 
 ## Step 2: Write a task
 
@@ -59,7 +58,7 @@ A few things to notice:
 
 - **You write the task.** This is the same shape as Pydantic AI's Temporal integration, you control the workflow, and the agent is one durable step within it. You can do other things in here too: branch, call the agent twice, log, whatever.
 - `params` is whatever you pass when you spawn the task (more on that in a second). It's plain JSON.
-- `ctx` is the Absurd task context. You usually don't touch it directly, the wrapped agent uses it under the hood to record checkpoints.
+- `ctx` is the Absurd task context. You usually don't touch it directly, the capability uses it under the hood to record checkpoints.
 - The return value is the task's result, stored in Postgres. Keep it JSON-serializable.
 
 ## Step 3: Spawn it
@@ -85,10 +84,10 @@ import asyncio
 
 from absurd_sdk import AsyncAbsurd
 from pydantic_ai import Agent
-from pydantic_ai_absurd import AbsurdAgent
+from pydantic_ai_absurd import AbsurdDurability
 
 absurd = AsyncAbsurd("postgresql://localhost/absurd", queue_name="agents")
-agent = AbsurdAgent(Agent("openai:gpt-5.2", name="analyst"), absurd)
+agent = Agent("openai:gpt-5.2", name="analyst", capabilities=[AbsurdDurability()])
 
 
 @absurd.register_task(name="analyse")
@@ -157,7 +156,7 @@ The user got their answer. You paid for each model call **once**. The crash cost
 
 You went from a plain agent to a durable one in five small moves:
 
-- [x] Wrap the agent with `AbsurdAgent`
+- [x] Attach the `AbsurdDurability` capability to the agent
 - [x] Write a task with `@absurd.register_task`
 - [x] `spawn` it from your app
 - [x] Drain it with `work_batch` (or `start_worker` for a long-running worker)

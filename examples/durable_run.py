@@ -18,7 +18,7 @@ from pathlib import Path
 import psycopg
 from absurd_sdk import AsyncAbsurd, AsyncConnection
 from pydantic_ai import Agent
-from pydantic_ai_absurd import AbsurdAgent
+from pydantic_ai_absurd import AbsurdDurability
 from testcontainers.postgres import PostgresContainer
 
 ABSURD_SQL = (Path(__file__).resolve().parent.parent / "tests" / "fixtures" / "absurd.sql").read_text()
@@ -43,7 +43,7 @@ async def main() -> None:
             absurd = AsyncAbsurd(conn, queue_name="agents")
             await absurd.create_queue()
 
-            agent = AbsurdAgent(Agent("openai:gpt-5.2", name="analyst"), absurd)
+            agent = Agent("openai:gpt-5.2", name="analyst", capabilities=[AbsurdDurability()])
 
             # Author the task; call agent.run() inside it. Each model/MCP call is
             # checkpointed, so a crash mid-run resumes from the last completed step.

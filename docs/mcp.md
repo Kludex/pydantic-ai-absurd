@@ -14,15 +14,13 @@ If your agent has ordinary Python function tools, pydantic-ai-absurd wraps them 
 
 ```python
 from pydantic_ai import Agent
-from pydantic_ai_absurd import AbsurdAgent
+from pydantic_ai_absurd import AbsurdDurability
 
-inner = Agent("openai:gpt-5.2", name="helper")
+agent = Agent("openai:gpt-5.2", name="helper", capabilities=[AbsurdDurability()])
 
-@inner.tool_plain
+@agent.tool_plain
 def charge(customer_id: str, cents: int) -> str:
     return billing.charge(customer_id, cents)  # a real side effect
-
-agent = AbsurdAgent(inner, absurd)  # `charge` is now checkpointed
 ```
 
 When the model calls `charge`, the result is recorded in Postgres. If the worker crashes after the charge but before the run finishes, the replay does **not** call `charge` again, it returns the stored result. The customer is charged once.
@@ -42,15 +40,21 @@ A call to an [MCP](https://modelcontextprotocol.io) server is a network round-tr
 ```python
 from pydantic_ai import Agent
 from pydantic_ai.mcp import MCPToolset
-from pydantic_ai_absurd import AbsurdAgent
+from pydantic_ai_absurd import AbsurdDurability
 
-toolset = MCPToolset("https://example.com/mcp")
-inner = Agent("openai:gpt-5.2", name="researcher", toolsets=[toolset])
-
-agent = AbsurdAgent(inner, absurd)
+toolset = MCPToolset("https://example.com/mcp", id="research")
+agent = Agent(
+    "openai:gpt-5.2",
+    name="researcher",
+    toolsets=[toolset],
+    capabilities=[AbsurdDurability()],
+)
 ```
 
-`MCPToolset` is Pydantic AI's unified way to talk to an MCP server, over HTTP, stdio, or an in-process server. You pass it a URL, a script path, or a server instance. When `AbsurdAgent` wraps the agent, it finds that `MCPToolset` and replaces it with a durable `AbsurdMCPToolset` automatically, you don't do anything.
+`MCPToolset` is Pydantic AI's unified way to talk to an MCP server, over HTTP, stdio, or an in-process server. You pass it a URL, a script path, or a server instance. When `AbsurdDurability` binds to the agent, it finds that `MCPToolset` and replaces it with a durable `AbsurdMCPToolset` automatically, you don't do anything.
+
+!!! note "Toolsets need an `id`"
+    The toolset's `id` names its checkpoint steps, so toolsets you pass to a durable agent need a unique one (tools registered directly on the agent are covered by the agent's own toolset). If it's missing you'll get a clear error at construction time.
 
 Now every tool call to that MCP server is a checkpoint. Crash mid-run, and on replay the tool result comes back from Postgres instead of hitting the server again.
 
