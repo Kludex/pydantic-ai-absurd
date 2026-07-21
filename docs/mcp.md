@@ -53,8 +53,8 @@ agent = Agent(
 
 `MCPToolset` is Pydantic AI's unified way to talk to an MCP server, over HTTP, stdio, or an in-process server. You pass it a URL, a script path, or a server instance. When `AbsurdDurability` binds to the agent, it finds that `MCPToolset` and replaces it with a durable `AbsurdMCPToolset` automatically, you don't do anything.
 
-!!! note "Toolsets need an `id`"
-    The toolset's `id` names its checkpoint steps, so toolsets you pass to a durable agent need a unique one (tools registered directly on the agent are covered by the agent's own toolset). If it's missing you'll get a clear error at construction time.
+!!! note "Give your toolsets an `id`"
+    The toolset's `id` is folded into its checkpoint step names. It's optional, but with more than one toolset of the same kind, distinct `id`s keep their checkpoints from sharing a name - and two toolsets with the *same* `id` are rejected at construction time.
 
 Now every tool call to that MCP server is a checkpoint. Crash mid-run, and on replay the tool result comes back from Postgres instead of hitting the server again.
 

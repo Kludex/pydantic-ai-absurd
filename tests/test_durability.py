@@ -70,15 +70,52 @@ async def test_reserved_default_model_id_raises() -> None:
         Agent(_make_model(), name='a', capabilities=[AbsurdDurability(models={'default': _make_model()})])
 
 
-async def test_leaf_toolset_without_id_raises() -> None:
+async def test_leaf_toolset_without_id_is_durable(absurd: AsyncAbsurd) -> None:
+    """An id-less toolset keeps working (and keeps the wrapper's step names) under the capability."""
+    tool_calls = {'calls': 0}
     toolset = FunctionToolset[None]()
+
+    @toolset.tool_plain
+    def charge_card(amount: int) -> str:
+        tool_calls['calls'] += 1
+        return f'charged {amount}'
+
+    def fn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        if len(messages) == 1:
+            return ModelResponse(parts=[ToolCallPart(tool_name='charge_card', args={'amount': 7})])
+        return ModelResponse(parts=[TextPart(content='done')])
+
+    agent = Agent(
+        FunctionModel(fn, model_name='fn'),
+        name='idless',
+        toolsets=[toolset],
+        capabilities=[AbsurdDurability()],
+    )
+    await _register_noop(absurd, 'idless')
+
+    async with running_task_context(absurd, 'idless', max_attempts=2) as ctx:
+        first = await agent.run('charge it')
+        task_id = ctx.task_id
+
+    async with reenter_running_task(absurd, task_id):
+        replayed = await agent.run('charge it')
+
+    assert tool_calls['calls'] == 1
+    assert replayed.output == first.output == 'done'
+
+
+async def test_same_toolset_instance_in_two_places_is_wrapped_once() -> None:
+    toolset = FunctionToolset[None](id='shared')
 
     @toolset.tool_plain
     def echo(value: str) -> str:  # pragma: no cover - never invoked, only wrap check
         return value
 
-    with pytest.raises(UserError, match='unique `id`'):
-        Agent(_make_model(), name='a', toolsets=[toolset], capabilities=[AbsurdDurability()])
+    agent = Agent(_make_model(), name='a', toolsets=[toolset, toolset], capabilities=[AbsurdDurability()])
+    bound = AbsurdDurability.from_agent(agent)
+    assert bound is not None
+    # One wrapper for `toolset`, one for the agent's own `<agent>` toolset.
+    assert len(bound._wrappers_by_leaf) == 2
 
 
 async def test_duplicate_toolset_id_raises() -> None:
@@ -236,6 +273,77 @@ async def test_runtime_function_toolset_rejected(absurd: AsyncAbsurd) -> None:
             await agent.run('hi', toolsets=[toolset])
 
 
+def _tool_calling_model(tool_name: str) -> FunctionModel:
+    def fn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        if len(messages) == 1:
+            return ModelResponse(parts=[ToolCallPart(tool_name=tool_name, args={})])
+        return ModelResponse(parts=[TextPart(content='done')])
+
+    return FunctionModel(fn, model_name='fn')
+
+
+def _late_toolset(calls: dict[str, int]) -> FunctionToolset[None]:
+    toolset = FunctionToolset[None](id='late')
+
+    @toolset.tool_plain
+    def late() -> str:
+        calls['calls'] += 1
+        return 'late result'
+
+    return toolset
+
+
+async def test_override_toolsets_rejected_inside_task(absurd: AsyncAbsurd) -> None:
+    calls = {'calls': 0}
+    agent: Agent[None, str] = Agent(_tool_calling_model('late'), name='a', capabilities=[AbsurdDurability()])
+    await _register_noop(absurd)
+    async with running_task_context(absurd, 'noop'):
+        with agent.override(toolsets=[_late_toolset(calls)]):
+            with pytest.raises(UserError, match='cannot be passed to `run\\(toolsets=...\\)` at runtime'):
+                await agent.run('hi')
+    assert calls['calls'] == 0
+
+
+async def test_override_toolsets_respected_outside_task() -> None:
+    calls = {'calls': 0}
+    agent: Agent[None, str] = Agent(_tool_calling_model('late'), name='a', capabilities=[AbsurdDurability()])
+    with agent.override(toolsets=[_late_toolset(calls)]):
+        result = await agent.run('hi')
+    assert result.output == 'done'
+    assert calls['calls'] == 1
+
+
+async def test_override_tools_rejected_inside_task(absurd: AsyncAbsurd) -> None:
+    calls = {'calls': 0}
+
+    def late() -> str:  # pragma: no cover - rejected before it can run
+        calls['calls'] += 1
+        return 'late result'
+
+    agent: Agent[None, str] = Agent(_tool_calling_model('late'), name='a', capabilities=[AbsurdDurability()])
+    await _register_noop(absurd)
+    async with running_task_context(absurd, 'noop'):
+        with agent.override(tools=[late]):
+            with pytest.raises(UserError, match='cannot be passed to `run\\(toolsets=...\\)` at runtime'):
+                await agent.run('hi')
+    assert calls['calls'] == 0
+
+
+async def test_override_tools_respected_outside_task() -> None:
+    """The overriding toolset shares the `<agent>` id; instance-keyed wrapping must not swap it away."""
+    calls = {'calls': 0}
+
+    def late() -> str:
+        calls['calls'] += 1
+        return 'late result'
+
+    agent: Agent[None, str] = Agent(_tool_calling_model('late'), name='a', capabilities=[AbsurdDurability()])
+    with agent.override(tools=[late]):
+        result = await agent.run('hi')
+    assert result.output == 'done'
+    assert calls['calls'] == 1
+
+
 async def test_runtime_external_toolset_allowed(absurd: AsyncAbsurd) -> None:
     agent: Agent[None, str] = Agent(_make_model(), name='a', capabilities=[AbsurdDurability()])
     await _register_noop(absurd)
@@ -365,6 +473,28 @@ async def test_wrapper_written_stream_checkpoint_replays_under_capability(absurd
             assert await result.get_output() == 'from-wrapper'
 
     assert counter['calls'] == 0
+
+
+async def test_string_default_model_replays_wrapper_checkpoint(absurd: AsyncAbsurd) -> None:
+    """A string default model checkpoints under the suffix-less step name the wrapper used,
+    so wrapper-era checkpoints replay after migrating."""
+    agent = Agent('test', name='strdef', capabilities=[AbsurdDurability()])
+    await _register_noop(absurd, 'strdef')
+
+    async with running_task_context(absurd, 'strdef', max_attempts=2) as ctx:
+        legacy_payload = ModelResponse(parts=[TextPart(content='from-wrapper')])
+        from pydantic_ai_absurd._model import _serialize
+
+        async def _write_legacy() -> dict[str, JsonValue]:
+            return _serialize(legacy_payload)
+
+        await ctx.step('strdef__model.request', _write_legacy)
+        task_id = ctx.task_id
+
+    async with reenter_running_task(absurd, task_id):
+        replayed = await agent.run('hi')
+
+    assert replayed.output == 'from-wrapper'
 
 
 async def test_cancel_suspended_response_is_checkpointed(absurd: AsyncAbsurd) -> None:

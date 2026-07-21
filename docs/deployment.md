@@ -114,7 +114,7 @@ A few things to know, each with a clear error (or a clear behavior) so you're ne
     Absurd tasks are async, so there's no room for a blocking call on the worker's event loop. Always `await agent.run(...)` inside a task.
 
 !!! danger "Toolsets are fixed at construction"
-    Function and MCP toolsets must be on the agent when `AbsurdDurability` binds to it - that's when they're wrapped for checkpointing. Passing one to `agent.run(toolsets=...)` inside a task is rejected with a `UserError` (non-executing toolsets like `ExternalToolset` are fine).
+    Function and MCP toolsets must be on the agent when `AbsurdDurability` binds to it - that's when they're wrapped for checkpointing. Adding one later - `agent.run(toolsets=...)`, `agent.override(toolsets=...)`, or `agent.override(tools=...)` - is rejected with a `UserError` inside a task, because it would run un-checkpointed. Outside a task those all work normally (non-executing toolsets like `ExternalToolset` are fine anywhere).
 
 !!! note "Streaming inside a task is a replay, not a live wire"
     `run_stream`, `run_stream_events`, and `iter` work inside a task: the model's stream is consumed inside the checkpointed step, then replayed to your code. That keeps the run replayable, but it means tokens don't cross the wire live - to react to events as they happen, set an `event_stream_handler` on `AbsurdDurability`; it runs inside the step, on the live stream. If you want to stream tokens to a user in real time, do that in your web layer with a run outside a task.
