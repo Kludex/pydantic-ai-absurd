@@ -156,25 +156,34 @@ class AbsurdDurability(BaseDurabilityCapability[AgentDepsT]):
         `override(...)`, or another capability - has no durable wrapper, so executing it inside
         a task would bypass checkpointing and re-run its side effects on recovery. Outside a
         task everything passes through and the agent behaves like a regular agent.
+
+        Candidates are collected with `visit_and_replace`, the same leaf-only walk registration
+        used. `apply` would also visit wrapper nodes Pydantic AI inserts itself (e.g. the
+        `CapabilityOwnedToolset` around a toolset contributed by `AbstractCapability.get_toolset()`),
+        which are never registered as leaves and would otherwise be misreported as runtime
+        toolsets - naming the inner toolset that *was* registered in the error.
+
+        Sharing that one walk means the rejection is raised *after* the swap has built the new
+        tree, rather than before it as it used to be. That is deliberate and safe: `swap` only
+        reads the registration maps and appends to a local list, the swapped tree is a fresh
+        structure that is discarded when the error propagates, and the raise still happens before
+        this method returns, so no un-checkpointed toolset can reach the run.
         """
-        if self.in_durable_context:
-            runtime_leaves: list[AbstractToolset[AgentDepsT]] = []
-
-            def collect(leaf: AbstractToolset[AgentDepsT]) -> None:
-                if id(leaf) not in self._construction_leaves:
-                    runtime_leaves.append(leaf)
-
-            toolset.apply(collect)
-            reject_unsupported_runtime_toolsets(
-                runtime_leaves,
-                unsupported_kinds=self._unsupported_runtime_toolset_kinds,
-                engine=self.engine_name,
-            )
+        in_durable_context = self.in_durable_context
+        runtime_leaves: list[AbstractToolset[AgentDepsT]] = []
 
         def swap(ts: AbstractToolset[AgentDepsT]) -> AbstractToolset[AgentDepsT]:
+            if in_durable_context and id(ts) not in self._construction_leaves:
+                runtime_leaves.append(ts)
             return self._wrappers_by_leaf.get(id(ts), ts)
 
-        return toolset.visit_and_replace(swap)
+        swapped = toolset.visit_and_replace(swap)
+        reject_unsupported_runtime_toolsets(
+            runtime_leaves,
+            unsupported_kinds=self._unsupported_runtime_toolset_kinds,
+            engine=self.engine_name,
+        )
+        return swapped
 
     async def _dispatch_event_stream_event(self, ctx: RunContext[AgentDepsT], event: AgentStreamEvent) -> None:
         task_ctx = current_async_context()
