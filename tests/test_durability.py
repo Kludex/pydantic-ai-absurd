@@ -5,6 +5,7 @@ from collections.abc import AsyncIterable, AsyncIterator
 import pytest
 from absurd_sdk import AsyncAbsurd, AsyncTaskContext, JsonValue
 from pydantic_ai import Agent, ModelMessage, ModelResponse
+from pydantic_ai.capabilities import AbstractCapability
 from pydantic_ai.exceptions import UserError
 from pydantic_ai.messages import (
     AgentStreamEvent,
@@ -342,6 +343,64 @@ async def test_override_tools_respected_outside_task() -> None:
         result = await agent.run('hi')
     assert result.output == 'done'
     assert calls['calls'] == 1
+
+
+async def test_capability_owned_toolset_is_durable(absurd: AsyncAbsurd) -> None:
+    """A toolset contributed by a capability is registered at construction, so it must be
+    wrapped and checkpointed, not rejected as a runtime toolset because of the
+    `CapabilityOwnedToolset` wrapper Pydantic AI puts around it."""
+    tool_calls = {'calls': 0}
+    toolset = FunctionToolset[None](id='owned')
+
+    @toolset.tool_plain
+    def charge_card(amount: int) -> str:
+        tool_calls['calls'] += 1
+        return f'charged {amount}'
+
+    class DemoCapability(AbstractCapability[None]):
+        def get_toolset(self) -> FunctionToolset[None]:
+            return toolset
+
+    def fn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        if len(messages) == 1:
+            return ModelResponse(parts=[ToolCallPart(tool_name='charge_card', args={'amount': 5})])
+        return ModelResponse(parts=[TextPart(content='done')])
+
+    agent: Agent[None, str] = Agent(
+        FunctionModel(fn, model_name='fn'),
+        name='owner',
+        capabilities=[DemoCapability(), AbsurdDurability()],
+    )
+    await _register_noop(absurd, 'owner')
+
+    async with running_task_context(absurd, 'owner', max_attempts=2) as ctx:
+        first = await agent.run('charge it')
+        task_id = ctx.task_id
+
+    async with reenter_running_task(absurd, task_id):
+        replayed = await agent.run('charge it')
+
+    assert tool_calls['calls'] == 1
+    assert replayed.output == first.output == 'done'
+
+
+async def test_runtime_toolset_still_rejected_alongside_capability_toolset(absurd: AsyncAbsurd) -> None:
+    """Ignoring wrapper nodes must not make genuine runtime toolsets slip through."""
+    owned = FunctionToolset[None](id='owned')
+
+    @owned.tool_plain
+    def greet() -> str:  # pragma: no cover - never invoked
+        return 'hello'
+
+    class DemoCapability(AbstractCapability[None]):
+        def get_toolset(self) -> FunctionToolset[None]:
+            return owned
+
+    agent: Agent[None, str] = Agent(_make_model(), name='a', capabilities=[DemoCapability(), AbsurdDurability()])
+    await _register_noop(absurd)
+    async with running_task_context(absurd, 'noop'):
+        with pytest.raises(UserError, match='cannot be passed to `run\\(toolsets=...\\)` at runtime'):
+            await agent.run('hi', toolsets=[_late_toolset({'calls': 0})])
 
 
 async def test_runtime_external_toolset_allowed(absurd: AsyncAbsurd) -> None:
