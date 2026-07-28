@@ -162,6 +162,12 @@ class AbsurdDurability(BaseDurabilityCapability[AgentDepsT]):
         `CapabilityOwnedToolset` around a toolset contributed by `AbstractCapability.get_toolset()`),
         which are never registered as leaves and would otherwise be misreported as runtime
         toolsets - naming the inner toolset that *was* registered in the error.
+
+        Sharing that one walk means the rejection is raised *after* the swap has built the new
+        tree, rather than before it as it used to be. That is deliberate and safe: `swap` only
+        reads the registration maps and appends to a local list, the swapped tree is a fresh
+        structure that is discarded when the error propagates, and the raise still happens before
+        this method returns, so no un-checkpointed toolset can reach the run.
         """
         in_durable_context = self.in_durable_context
         runtime_leaves: list[AbstractToolset[AgentDepsT]] = []
