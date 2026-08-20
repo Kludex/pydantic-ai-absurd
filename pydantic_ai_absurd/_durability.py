@@ -266,7 +266,7 @@ class AbsurdDurability(BaseDurabilityCapability[AgentDepsT]):
                 # wrapper resumes correctly under the capability.
                 response = _deserialize(payload)
                 completed = CompletedStreamedResponse(
-                    response, model_request_parameters=request.model_request_parameters, events=True
+                    response, model_request_parameters=request.model_request_parameters, replay_events=True
                 )
                 return StreamedActivityResult(response=response, events=[event async for event in completed])
             response_payload = payload['response']

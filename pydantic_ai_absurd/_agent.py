@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any
 from absurd_sdk import AsyncAbsurd
 from pydantic_ai import (
     AbstractToolset,
+    CancellationToken,
     FunctionToolset,
     _instructions,
     _utils,
@@ -23,14 +24,19 @@ from pydantic_ai.agent import (
     ParallelExecutionMode,
     WrapperAgent,
 )
-from pydantic_ai.agent.abstract import AgentMetadata, AgentModelSettings, AgentRetries, RunOutputDataT
+from pydantic_ai.agent.abstract import (
+    AgentMetadata,
+    AgentModelSettings,
+    AgentRetries,
+    AgentRunEvents,
+    RunOutputDataT,
+)
 from pydantic_ai.capabilities import AgentCapability
 from pydantic_ai.exceptions import UserError
 from pydantic_ai.mcp import MCPToolset
 from pydantic_ai.models import Model
 from pydantic_ai.output import OutputDataT, OutputSpec
 from pydantic_ai.result import StreamedRunResult
-from pydantic_ai.run import AgentRunResultEvent
 from pydantic_ai.tools import AgentDepsT, AgentNativeTool, DeferredToolResults, Tool, ToolFuncEither
 
 from ._function_toolset import AbsurdFunctionToolset
@@ -186,11 +192,13 @@ class AbsurdAgent(WrapperAgent[AgentDepsT, OutputDataT]):
         message_history: Sequence[_messages.ModelMessage] | None = None,
         deferred_tool_results: DeferredToolResults | None = None,
         conversation_id: str | None = None,
+        run_id: str | None = None,
         model: models.Model | models.KnownModelName | str | None = None,
         instructions: _instructions.AgentInstructions[AgentDepsT] = None,
         deps: AgentDepsT = None,  # type: ignore[assignment]
         model_settings: AgentModelSettings[AgentDepsT] | None = None,
         usage_limits: _usage.UsageLimits | None = None,
+        cancellation_token: CancellationToken | None = None,
         usage: _usage.RunUsage | None = None,
         metadata: AgentMetadata[AgentDepsT] | None = None,
         retries: int | AgentRetries | None = None,
@@ -207,11 +215,13 @@ class AbsurdAgent(WrapperAgent[AgentDepsT, OutputDataT]):
             message_history=message_history,
             deferred_tool_results=deferred_tool_results,
             conversation_id=conversation_id,
+            run_id=run_id,
             model=model,
             instructions=instructions,
             deps=deps,
             model_settings=model_settings,
             usage_limits=usage_limits,
+            cancellation_token=cancellation_token,
             usage=usage,
             metadata=metadata,
             retries=retries,
@@ -230,11 +240,13 @@ class AbsurdAgent(WrapperAgent[AgentDepsT, OutputDataT]):
         message_history: Sequence[_messages.ModelMessage] | None = None,
         deferred_tool_results: DeferredToolResults | None = None,
         conversation_id: str | None = None,
+        run_id: str | None = None,
         model: models.Model | models.KnownModelName | str | None = None,
         instructions: _instructions.AgentInstructions[AgentDepsT] = None,
         deps: AgentDepsT = None,  # type: ignore[assignment]
         model_settings: AgentModelSettings[AgentDepsT] | None = None,
         usage_limits: _usage.UsageLimits | None = None,
+        cancellation_token: CancellationToken | None = None,
         usage: _usage.RunUsage | None = None,
         metadata: AgentMetadata[AgentDepsT] | None = None,
         retries: int | AgentRetries | None = None,
@@ -258,11 +270,13 @@ class AbsurdAgent(WrapperAgent[AgentDepsT, OutputDataT]):
         message_history: Sequence[_messages.ModelMessage] | None = None,
         deferred_tool_results: DeferredToolResults | None = None,
         conversation_id: str | None = None,
+        run_id: str | None = None,
         model: models.Model | models.KnownModelName | str | None = None,
         instructions: _instructions.AgentInstructions[AgentDepsT] = None,
         deps: AgentDepsT = None,  # type: ignore[assignment]
         model_settings: AgentModelSettings[AgentDepsT] | None = None,
         usage_limits: _usage.UsageLimits | None = None,
+        cancellation_token: CancellationToken | None = None,
         usage: _usage.RunUsage | None = None,
         metadata: AgentMetadata[AgentDepsT] | None = None,
         retries: int | AgentRetries | None = None,
@@ -279,11 +293,13 @@ class AbsurdAgent(WrapperAgent[AgentDepsT, OutputDataT]):
                 message_history=message_history,
                 deferred_tool_results=deferred_tool_results,
                 conversation_id=conversation_id,
+                run_id=run_id,
                 model=resolved,
                 instructions=instructions,
                 deps=deps,
                 model_settings=model_settings,
                 usage_limits=usage_limits,
+                cancellation_token=cancellation_token,
                 usage=usage,
                 metadata=metadata,
                 retries=retries,
@@ -301,11 +317,13 @@ class AbsurdAgent(WrapperAgent[AgentDepsT, OutputDataT]):
                 message_history=message_history,
                 deferred_tool_results=deferred_tool_results,
                 conversation_id=conversation_id,
+                run_id=run_id,
                 model=None,
                 instructions=instructions,
                 deps=deps,
                 model_settings=model_settings,
                 usage_limits=usage_limits,
+                cancellation_token=cancellation_token,
                 usage=usage,
                 metadata=metadata,
                 retries=retries,
@@ -324,11 +342,13 @@ class AbsurdAgent(WrapperAgent[AgentDepsT, OutputDataT]):
         message_history: Sequence[_messages.ModelMessage] | None = None,
         deferred_tool_results: DeferredToolResults | None = None,
         conversation_id: str | None = None,
+        run_id: str | None = None,
         model: models.Model | models.KnownModelName | str | None = None,
         instructions: _instructions.AgentInstructions[AgentDepsT] = None,
         deps: AgentDepsT = None,  # type: ignore[assignment]
         model_settings: AgentModelSettings[AgentDepsT] | None = None,
         usage_limits: _usage.UsageLimits | None = None,
+        cancellation_token: CancellationToken | None = None,
         usage: _usage.RunUsage | None = None,
         metadata: AgentMetadata[AgentDepsT] | None = None,
         retries: int | AgentRetries | None = None,
@@ -336,7 +356,7 @@ class AbsurdAgent(WrapperAgent[AgentDepsT, OutputDataT]):
         toolsets: Sequence[AbstractToolset[AgentDepsT]] | None = None,
         capabilities: Sequence[AgentCapability[AgentDepsT]] | None = None,
         spec: dict[str, Any] | AgentSpec | None = None,
-    ) -> AbstractAsyncContextManager[AsyncIterator[_messages.AgentStreamEvent | AgentRunResultEvent[Any]]]:
+    ) -> AbstractAsyncContextManager[AgentRunEvents[Any]]:
         raise UserError(
             '`agent.run_stream_events()` cannot be used with Absurd. Set an '
             '`event_stream_handler` on the agent and use `agent.run()` instead.'
@@ -351,11 +371,13 @@ class AbsurdAgent(WrapperAgent[AgentDepsT, OutputDataT]):
         message_history: Sequence[_messages.ModelMessage] | None = None,
         deferred_tool_results: DeferredToolResults | None = None,
         conversation_id: str | None = None,
+        run_id: str | None = None,
         model: models.Model | models.KnownModelName | str | None = None,
         instructions: _instructions.AgentInstructions[AgentDepsT] = None,
         deps: AgentDepsT = None,  # type: ignore[assignment]
         model_settings: AgentModelSettings[AgentDepsT] | None = None,
         usage_limits: _usage.UsageLimits | None = None,
+        cancellation_token: CancellationToken | None = None,
         usage: _usage.RunUsage | None = None,
         metadata: AgentMetadata[AgentDepsT] | None = None,
         retries: int | AgentRetries | None = None,
@@ -376,11 +398,13 @@ class AbsurdAgent(WrapperAgent[AgentDepsT, OutputDataT]):
             message_history=message_history,
             deferred_tool_results=deferred_tool_results,
             conversation_id=conversation_id,
+            run_id=run_id,
             model=self._model.resolve_model(model),
             instructions=instructions,
             deps=deps,
             model_settings=model_settings,
             usage_limits=usage_limits,
+            cancellation_token=cancellation_token,
             usage=usage,
             metadata=metadata,
             retries=retries,
@@ -403,6 +427,7 @@ class AbsurdAgent(WrapperAgent[AgentDepsT, OutputDataT]):
         tools: Sequence[Tool[AgentDepsT] | ToolFuncEither[AgentDepsT, ...]] | _utils.Unset = _utils.UNSET,
         native_tools: Sequence[AgentNativeTool[AgentDepsT]] | _utils.Unset = _utils.UNSET,
         instructions: _instructions.AgentInstructions[AgentDepsT] | _utils.Unset = _utils.UNSET,
+        metadata: AgentMetadata[AgentDepsT] | _utils.Unset = _utils.UNSET,
         model_settings: AgentModelSettings[AgentDepsT] | _utils.Unset = _utils.UNSET,
         retries: int | AgentRetries | _utils.Unset = _utils.UNSET,
         spec: dict[str, Any] | AgentSpec | None = None,
@@ -417,6 +442,7 @@ class AbsurdAgent(WrapperAgent[AgentDepsT, OutputDataT]):
             tools=tools,
             native_tools=native_tools,
             instructions=instructions,
+            metadata=metadata,
             model_settings=model_settings,
             retries=retries,
             spec=spec,
