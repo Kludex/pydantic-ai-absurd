@@ -67,8 +67,8 @@ class AbsurdMCPToolset(WrapperToolset[AgentDepsT]):
         assert isinstance(self.wrapped, MCPToolset)
         return self.wrapped
 
-    def tool_for_tool_def(self, tool_def: ToolDefinition) -> ToolsetTool[AgentDepsT]:
-        return self._server.tool_for_tool_def(tool_def)
+    def tool_for_tool_def(self, tool_def: ToolDefinition, *, ctx: RunContext[AgentDepsT]) -> ToolsetTool[AgentDepsT]:
+        return self._server.tool_for_tool_def(tool_def, ctx=ctx)
 
     @property
     def id(self) -> str | None:
@@ -91,7 +91,7 @@ class AbsurdMCPToolset(WrapperToolset[AgentDepsT]):
 
     async def get_tools(self, ctx: RunContext[AgentDepsT]) -> dict[str, ToolsetTool[AgentDepsT]]:
         if self._server.cache_tools and self._cached_tool_defs is not None:
-            return {name: self.tool_for_tool_def(td) for name, td in self._cached_tool_defs.items()}
+            return {name: self.tool_for_tool_def(td, ctx=ctx) for name, td in self._cached_tool_defs.items()}
 
         async def _inner() -> dict[str, JsonValue]:
             tools = await super(AbsurdMCPToolset, self).get_tools(ctx)
@@ -102,7 +102,7 @@ class AbsurdMCPToolset(WrapperToolset[AgentDepsT]):
 
         payload = await self._run_step('get_tools', _inner)
         tool_defs = _deserialize_tool_defs(payload)
-        result = {name: self.tool_for_tool_def(tool_def) for name, tool_def in tool_defs.items()}
+        result = {name: self.tool_for_tool_def(tool_def, ctx=ctx) for name, tool_def in tool_defs.items()}
         if self._server.cache_tools:
             self._cached_tool_defs = tool_defs
         return result
